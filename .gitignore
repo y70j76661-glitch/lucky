@@ -1,0 +1,38 @@
+# API 키 — 절대 커밋 금지
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# 대용량 인덱스 (재생성)
+embeddings.json
+chunks.json
+
+# 대회 제공 원본 (재배포 금지)
+docs/
+*.zip
+*.pdf
+*.docx
+
+# 산출물·로그
+server.log
+watchdog.log
+nohup.out
+embed_log.txt
+retry_log.txt
+reg*.txt
+mock_exam_result.txt
+mock_full_result.txt
+mock_full_state.json
+products.json
+
+# 백업본
+main_*backup*.py
+main_v*.py
+
+# 파이썬
+__pycache__/
+*.pyc
+venv/
+.venv/
