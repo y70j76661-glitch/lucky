@@ -8,7 +8,7 @@
 #   trace_must  : think_trace 에 반드시 포함
 #   trace_never : think_trace 에 절대 나오면 안 됨
 #   pipe_min    : 답변의 '|' 최소 개수 (비교표 항목 수 유지 확인)
-import re, time, requests
+import re, sys, time, requests
 
 # v9.46: 판정 문구를 여기에 다시 쓰지 않는다. main.py가 가진 값을 그대로 읽어온다.
 #   (v9.42→v9.43에서 코드는 문구를 바꿨는데 테스트는 옛 문자열을 들고 있어
@@ -23,9 +23,24 @@ def _from_main(name, default):
 
 
 RISK_CARD_MARK = _from_main("RISK_CARD_MARK", "[위험등급 정리")
+# v9.74: 표가 등급을 말하면 코드는 둘 중 하나를 반드시 붙인다 —
+#   원문에서 확인했으면 '정리', 확인하지 못했으면 '대조 불가' 경고.
+RISK_WARN_MARK = _from_main("RISK_WARN_MARK", "[위험등급 원문 대조")
 
 BASE = "http://localhost:8000/answer"
 PACE = 1.0        # 문항 사이 대기(초) — 속도 제한(429)으로 인한 허위 실패 방지
+RUNS = 2          # v2: 모든 항목을 이 횟수만큼 돌리고 "전부 통과"해야 통과로 본다
+#
+# 사용법
+#   python3 test_regression.py --core          핵심 16건 × 1회    (고치는 중, 약 4분) ★평소엔 이것
+#   python3 test_regression.py                 전체 61건 × 2회   (올리기 직전용, 약 24분)
+#   python3 test_regression.py R27 R44 R57     그 항목만 × 2회    (고치는 중, 1~2분)
+#   python3 test_regression.py -1 R27 R44      그 항목만 × 1회    (더 빠르게)
+#   python3 test_regression.py -1 표           why에 '표'가 든 항목만 × 1회
+#   python3 test_regression.py -1              전체 × 1회         (대략 확인용, 11분)
+#
+#   부분 실행은 '방금 고친 것이 되는지'를 보는 용도다.
+#   다른 것을 깨뜨렸는지는 전체를 돌려야 알 수 있으므로, 올리기 전에는 반드시 전체를 돌린다.
 
 CASES = [
     dict(id="R01", why="구기준 400만원 차단 / 잘못된 전제 교정 (v5.2)",
@@ -333,6 +348,58 @@ CASES = [
            "절세법만 알려주세요.",
          must=["60일"],
          never=["Mirae Asset Securities"]),
+
+    dict(id="R53", why="과세제외금액(공제 안 받은 납입금)에 기타소득세를 붙이지 않는다 (v9.55)",
+         q="1,800만원까지 넣을 수 있다면서 왜 세액공제는 900만원까지만 되나요? "
+           "나머지 900만원은 뭐예요?",
+         must=["900"],
+         # 코드가 붙이는 예외 고지 — 이 문구가 있어야 오해가 남지 않는다
+         must_any=["과세제외", "받지 않은 납입금"]),
+
+    dict(id="R54", why="소득 미상이면 금액을 하나로 확정하지 않는다 — 두 경우 명시 (v9.55)",
+         q="부부가 각각 연금저축 600만원씩 넣으면 합쳐서 1,200만원 공제받나요?",
+         must=["16.5", "13.2", "소득 구간이 확인되지 않아"],
+         never=["둘 중 하나의 소득 구간"]),
+
+    dict(id="R55", why="무관 응답이 '근거 자료 범위 밖'임을 밝힌다 (v9.58)",
+         q="미래에셋 핀테크 허브 제휴사가 되려면 어떤 절차를 거쳐야 합니까?",
+         must_any=["자료를 근거로만", "범위를 벗어", "확인할 수 없", "확인되지 않"],
+         # 문서에 없는 주제를 구체적으로 설명하면 할루시네이션
+         never=["제휴사는 다음", "신청 절차는 다음", "참가비", "지원 자격은 다음"]),
+
+    dict(id="R56", why="'자료에 없다'로 끝난 답변의 출처가 근거처럼 보이지 않게 (v9.58)",
+         q="미래에셋 핀테크 허브란 무엇입니까?",
+         must_any=["확인할 수 없", "함께 조회된 자료", "자료를 근거로만", "범위를 벗어"]),
+
+    dict(id="R57", why="문서에 없는 '이유'를 지어내지 않는다 (v9.64)",
+         # doc8 원문: "변경 불가하며 아래와 같은 오류메시지가 나옵니다" — 이유는 없다
+         q="분산투자매수형으로 변경이 안 되는 경우가 있나요?",
+         must_any=["변경 불가", "변경이 불가", "불가능"],
+         never=["간주되기 때문", "판단되기 때문", "해석되기 때문"]),
+
+    dict(id="R58", why="깨진 스캔 문서에서도 온전한 수치는 정확히 인용 (v9.63)",
+         # doc54 원문: "위험투자 비율 한도는 70%이지만, 구독 서비스 이용 시 68%로 제한"
+         q="퇴직연금 구독 서비스를 쓰면 위험자산 비율 한도가 어떻게 되나요?",
+         must=["68"],
+         must_any=["70", "구독"]),
+
+    dict(id="R59", why="규정이 있는 제도를 '불가능하다'고 뒤집지 않는다 (v9.69)",
+         # doc3: 연금저축계좌 증권담보융자의 만기·이자·반대매매·해지상환 규정이 있다
+         q="연금저축계좌에서 담보대출이 가능한가요?",
+         never=["담보대출이 불가", "담보대출은 불가", "담보대출을 받을 수는 없",
+                "담보대출이 허용되지 않", "담보대출이 안 됩니다"]),
+
+    dict(id="R60", why="계좌를 다른 금융사로 옮길 때의 실물이전 불가사유를 찾는다 (v9.71)",
+         # v9.71 정정: 앞선 질문(일반 주식계좌→연금계좌 입고)은 문서가 다루지 않는
+         #   내용이었다. doc34의 '실물이전 불가사유'는 '계좌를 옮길 때'의 이야기다.
+         #   문서가 실제로 답하는 질문으로 바꿔 검사한다.
+         q="퇴직연금 계좌를 다른 금융사로 옮길 때 보유한 지분증권도 실물이전이 되나요?",
+         must_any=["지분증권", "실물이전", "불가"]),
+
+    dict(id="R61", why="문서가 다루지 않는 이전은 지어내지 않는다 (v9.71)",
+         # 일반 주식계좌 → 연금계좌 입고는 문서에 없다. '확인할 수 없다'가 정답이다.
+         q="주식계좌에 있는 일부 주식을 연금계좌로 옮기고 싶은데 가능한가요?",
+         must_any=["확인할 수 없", "확인되지 않", "자료에 없", "명시되어 있지 않"]),
 ]
 
 # 모든 답변에 공통으로 적용되는 검사
@@ -342,7 +409,14 @@ GLOBAL_NEVER = ["[문서1]", "[문서2]", "[문서3]", "[문서4]", "[문서5]",
 
 
 def check(case, ans, trace):
+    # v9.73: '서버가 답을 못 만든 것'과 '답의 품질이 나쁜 것'은 다른 문제다.
+    #   섞어 놓으면 코드를 고쳐야 할 곳을 잘못 찾는다 (실측 R52: 예외였는데
+    #   '60일 누락 + 출처 누락'으로 보여서 기한 로직을 의심했다).
+    if trace.startswith("오류 발생:") or "재시도 후에도 실패" in trace:
+        return [f"※ 서버 오류(품질 문제 아님) — {trace[:140]}"]
     fails = []
+    if trace.startswith("[1차 시도 실패"):
+        fails.append(f"※ 1차 시도 실패 후 재시도로 살아남음 — {trace[:100]}")
     for k in case.get("must", []):
         if k not in ans:
             fails.append(f"필수 누락: {k}")
@@ -367,74 +441,151 @@ def check(case, ans, trace):
     # v9.41 불변식: 표에 '자료 없음' 칸을 넣었으면 그 의미를 밝히는 각주가 있어야 한다
     if "자료 없음 |" in ans and "'자료 없음'으로 표시된 항목" not in ans:
         fails.append("자료 없음 각주 누락")
+    # v9.60 불변식: 마크다운 이스케이프가 화면에 그대로 노출되면 안 된다
+    if re.search(r"\\[~*_\[\]()#+]", ans):
+        fails.append("마크다운 이스케이프 노출")
     # v9.42 불변식: 표에서 위험등급이 2개 이상 확인되면 등급 정리가 반드시 붙는다
     _rr = [l for l in ans.splitlines()
            if l.count("|") >= 2 and ("위험등급" in l or "위험 등급" in l)]
     if _rr and len(re.findall(r"[1-6]\s*등급", _rr[0])) >= 2 \
-            and RISK_CARD_MARK not in ans:
-        fails.append(f"위험등급 정리 누락({RISK_CARD_MARK})")
+            and RISK_CARD_MARK not in ans and RISK_WARN_MARK not in ans:
+        fails.append(f"위험등급 출처 표기 누락({RISK_CARD_MARK} / {RISK_WARN_MARK})")
     if "[참고 문서]" not in ans and "무관" not in trace:
         fails.append("출처 표기 누락")
+    # v9.77 불변식: 표의 모든 행은 머리글과 칸수가 같아야 한다 (fix_table_rows가 보장)
+    _tr = [l for l in ans.splitlines() if l.count("|") >= 2]
+    if len(_tr) >= 3:
+        _tw = _tr[0].count("|")
+        _tb = sum(1 for l in _tr[1:] if l.count("|") != _tw)
+        if _tb:
+            fails.append(f"표 칸수 불일치({_tb}행)")
     return fails
 
 
+def _ask(qid, q):
+    try:
+        d = requests.get(BASE, params={"question_id": qid, "question": q},
+                         timeout=300).json()
+        return d.get("answer", ""), d.get("think_trace", "")
+    except Exception as e:
+        return f"[호출 실패: {e}]", ""
+
+
+# v9.76: 크레딧을 아끼려면 '전체 122질문'을 습관처럼 돌리면 안 된다.
+#   핵심 묶음 = 코드가 책임지는 불변식(숫자·표·위험등급·기한·출처)을 대표하는 항목.
+#   고치는 중에는 이것만(16질문), 올리기 직전에만 전체(122질문).
+CORE = ["R01", "R02", "R03", "R04", "R13", "R25", "R27", "R41",
+        "R44", "R45", "R46", "R47", "R50", "R52", "R53", "R61"]
+
+
+def _select():
+    """명령줄 인자로 실행할 항목과 횟수를 고른다. → (항목 목록, 횟수, 설명)"""
+    args = sys.argv[1:]
+    runs = RUNS
+    if "-1" in args:
+        runs = 1
+        args.remove("-1")
+    if "--core" in args:
+        args.remove("--core")
+        core = [c for c in CASES if c["id"] in CORE]
+        return core, (1 if runs == RUNS else runs), f"핵심({len(core)}건)"
+    if not args:
+        return CASES, runs, "전체"
+    picked, labels = [], []
+    for c in CASES:
+        for a in args:
+            if a.upper() == c["id"] or a in c["why"] or a in c["q"]:
+                picked.append(c)
+                break
+    if not picked:
+        print(f"고른 조건에 맞는 항목이 없습니다: {' '.join(args)}")
+        raise SystemExit(2)
+    return picked, runs, "선택(" + " ".join(args) + ")"
+
+
 def main():
-    total = len(CASES)
+    _stop_if_concurrent()
+    cases, runs, label = _select()
+    total = len(cases)
     t0 = time.time()
-    print(f"회귀 테스트: 과거 수정 {total}건이 유지되는지 검사")
-    print("진행 상황을 보려면 다른 창에서  tail -f <결과파일>\n")
+    print(f"회귀 테스트 [{label}]: {total}건 × {runs}회 — 모두 통과해야 통과")
+    print("  (v2: 통과한 항목도 반드시 여러 번 돌린다. 예전에는 1회 통과하면 넘어가서")
+    print("   50%로 흔들리는 항목이 50% 확률로 조용히 통과했다. 심사는 1회뿐이다.)\n")
     passed, failed, flaky = [], [], []
-    for n, c in enumerate(CASES, 1):
-        time.sleep(PACE)
+    for n, c in enumerate(cases, 1):
         el = time.time() - t0
         eta = (el / (n - 1) * (total - n + 1)) if n > 1 else 0
         print(f"[{n:2d}/{total}] {c['id']} 검사 중… "
-              f"(경과 {el/60:.1f}분, 남은 예상 {eta/60:.1f}분)", flush=True)          # 실제 심사는 질문을 하나씩 던진다. 연속 부하를 흉내내지 않는다.
-        try:
-            r = requests.get(BASE, params={"question_id": c["id"], "question": c["q"]},
-                             timeout=300)
-            d = r.json()
-            ans, trace = d.get("answer", ""), d.get("think_trace", "")
-            fails = check(c, ans, trace)
-        except Exception as e:
-            fails = [f"호출 실패: {e}"]
-        if fails:
-            # v9.15: 답변에는 흔들림이 있다. 1회 더 돌려 '재발'과 '간헐'을 구분한다.
-            try:
-                r2 = requests.get(BASE, params={"question_id": c["id"] + "-2",
-                                                "question": c["q"]}, timeout=300)
-                d2 = r2.json()
-                fails2 = check(c, d2.get("answer", ""), d2.get("think_trace", ""))
-            except Exception as e:
-                fails2 = [f"호출 실패: {e}"]
-            if fails2:
-                failed.append((c, fails, "재발"))
-                print(f"  [X] {c['id']}  {c['why']}  ← 2회 모두 실패")
-                for f in fails2:
-                    print(f"        └ {f}")
-            else:
-                flaky.append((c, fails))
-                print(f"  [~] {c['id']}  {c['why']}  ← 2회 중 1회만 실패(간헐)")
-                for f in fails:
-                    print(f"        └ {f}")
-        else:
+              f"(경과 {el/60:.1f}분, 남은 예상 {eta/60:.1f}분)", flush=True)
+        rounds = []
+        for r in range(runs):
+            time.sleep(PACE)
+            ans, trace = _ask(f"{c['id']}-{r+1}", c["q"])
+            rounds.append(check(c, ans, trace))
+        bad = [i for i, f in enumerate(rounds) if f]
+        if not bad:
             passed.append(c)
             print(f"  [O] {c['id']}  {c['why']}")
+        elif len(bad) == runs:
+            failed.append((c, rounds[-1]))
+            print(f"  [X] {c['id']}  {c['why']}  ← {runs}회 모두 실패")
+            for f in rounds[-1]:
+                print(f"        └ {f}")
+        else:
+            flaky.append((c, rounds[bad[0]], len(bad)))
+            print(f"  [~] {c['id']}  {c['why']}  "
+                  f"← {runs}회 중 {len(bad)}회 실패(흔들림 = 심사에서 {len(bad)}/{runs} 확률로 오답)")
+            for f in rounds[bad[0]]:
+                print(f"        └ {f}")
 
     print("\n" + "=" * 68)
-    print(f"===== 회귀 결과: 통과 {len(passed)} / 간헐 {len(flaky)} / 재발 {len(failed)} "
-          f"(전체 {len(CASES)}) =====")
+    print(f"===== 회귀 결과: 통과 {len(passed)} / 흔들림 {len(flaky)} / 재발 {len(failed)} "
+          f"({label} {total}건 × {runs}회) =====")
     if failed:
-        print("\n재발한 항목 (2회 모두 실패 — 코드/프롬프트를 고쳐야 함):")
-        for c, fails, _ in failed:
+        print(f"\n재발 ({runs}회 모두 실패 — 코드를 고쳐야 함):")
+        for c, fails in failed:
             print(f"  - {c['id']} {c['why']}")
             print(f"    질문: {c['q'][:60]}")
     if flaky:
-        print("\n간헐 항목 (2회 중 1회 실패 — 답변 흔들림, 지시를 더 강하게 해야 함):")
-        for c, fails in flaky:
-            print(f"  - {c['id']} {c['why']}")
+        print("\n흔들림 (일부 회차 실패 — 심사는 1회뿐이므로 이것도 오답이다):")
+        for c, fails, k in flaky:
+            print(f"  - {c['id']} ({k}/{runs}회 실패) {c['why']}")
+            print(f"    질문: {c['q'][:60]}")
     if not failed and not flaky:
         print("과거 수정 사항이 모두 유지되고 있습니다.")
+    if label != "전체":
+        print("\n※ 부분 실행입니다. 올리기 전에는 인자 없이 전체를 한 번 돌리세요.")
+    # 배포 게이트: 하나라도 어긋나면 0이 아닌 코드로 끝난다
+    sys.exit(0 if (not failed and not flaky) else 1)
+
+
+
+def _stop_if_concurrent():
+    """다른 테스트가 동시에 돌면 API 호출이 겹쳐 '허위 실패'가 난다.
+    실측: 회귀와 주제시험을 같이 돌렸더니 표 생성 항목 5건이 무더기로 실패했다.
+    사람이 기억해야 하는 규칙은 언젠가 어긋나므로 코드가 막는다."""
+    import os, subprocess, sys as _s
+    try:
+        out = subprocess.run(["pgrep", "-af", "python3"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return
+    me = str(os.getpid())
+    others = []
+    for line in out.splitlines():
+        pid = line.split(" ", 1)[0]
+        if pid == me:
+            continue
+        if any(k in line for k in ("test_regression", "hunt_matrix", "test_topic",
+                                   "mock_exam", "test_hunt", "test_consistency")):
+            others.append(line)
+    if others:
+        print("!! 다른 테스트가 이미 돌고 있습니다. 동시에 돌리면 API 호출이 겹쳐")
+        print("!! 표 생성 같은 무거운 항목이 허위로 실패합니다. 중단합니다.")
+        for l in others:
+            print("   ", l)
+        print("!! 끝난 뒤 다시 실행하세요:  pgrep -af 'test_|hunt_'")
+        _s.exit(2)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,672 @@
+import os, json, re, time, requests
+import numpy as np
+from fastapi import FastAPI
+from dotenv import load_dotenv
+
+load_dotenv()
+API_KEY = os.getenv("CLOVA_API_KEY")
+EMB_URL = "https://clovastudio.stream.ntruss.com/v1/api-tools/embedding/v2"
+CHAT_URL = "https://clovastudio.stream.ntruss.com/v3/chat-completions/HCX-005"
+HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+
+# ---- 서버 시작 시 딱 1번 로딩 (질문마다 다시 안 읽음) ----
+print("검색 인덱스 로딩 중...")
+with open("chunks.json", encoding="utf-8") as f:
+    chunks = json.load(f)
+with open("embeddings.json", encoding="utf-8") as f:
+    embs = json.load(f)
+idx_list = [e["idx"] for e in embs]
+matrix = np.array([e["embedding"] for e in embs])
+matrix = matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
+print(f"로딩 완료: 청크 {len(idx_list)}개")
+
+# ---- v7: 경량 BM25 키워드 인덱스 (외부 라이브러리 없이 직접 구현) ----
+import math
+from collections import Counter
+
+def _tok(text):
+    """한국어 대응 토큰화: 공백 단어 + 2글자 조각(바이그램)"""
+    words = text.lower().split()
+    grams = []
+    for w in words:
+        grams.append(w)
+        grams += [w[i:i + 2] for i in range(len(w) - 1)]
+    return grams
+
+try:
+    print("BM25 키워드 인덱스 구축 중... (수십 초 걸릴 수 있음)")
+    _N = len(idx_list)
+    _doc_len = np.zeros(_N)
+    _df = {}
+    _tmp = []
+    for i, j in enumerate(idx_list):
+        c = Counter(_tok(chunks[j]["text"]))
+        _tmp.append(c)
+        _doc_len[i] = sum(c.values())
+        for t in c:
+            _df[t] = _df.get(t, 0) + 1
+    _avg_len = float(_doc_len.mean()) or 1.0
+    # 너무 흔한 토큰(전체 40% 이상 문서에 등장)은 제외 → 메모리·속도 절약
+    _idf = {t: math.log(1 + (_N - n + 0.5) / (n + 0.5))
+            for t, n in _df.items() if n <= _N * 0.4}
+    _inv = {}
+    for i, c in enumerate(_tmp):
+        for t, tf in c.items():
+            if t in _idf:
+                _inv.setdefault(t, []).append((i, tf))
+    _inverted = {t: (np.array([p[0] for p in v], dtype=np.int32),
+                     np.array([p[1] for p in v], dtype=np.float32))
+                 for t, v in _inv.items()}
+    del _tmp, _inv, _df
+
+    def bm25_scores(query, k1=1.5, b=0.75):
+        s = np.zeros(_N)
+        norm = k1 * (1 - b + b * _doc_len / _avg_len)
+        for t in set(_tok(query)):
+            hit = _inverted.get(t)
+            if hit is None:
+                continue
+            ids, tfs = hit
+            s[ids] += _idf[t] * tfs * (k1 + 1) / (tfs + norm[ids])
+        return s
+
+    HYBRID = True
+    SEARCH_MODE = "임베딩+키워드(BM25) 하이브리드"
+    print(f"BM25 인덱스 구축 완료 (토큰 {len(_inverted):,}종) → 하이브리드 검색 사용")
+except Exception as _e:
+    HYBRID = False
+    SEARCH_MODE = "임베딩"
+    print(f"BM25 구축 실패, 임베딩 단독 검색으로 진행: {_e}")
+
+app = FastAPI()
+
+# ============================================================
+# 라우팅 설정
+# ============================================================
+
+# 무관 '즉시 차단' 임계값 (2026-08-18 조정)
+# 1차 실험(test_threshold.py): 관련 0.642~0.706 vs 무관 0.427~0.507 → 0.55로 시작
+# 추가 테스트에서 겹침 발견: "TDF가 어떤 상품이야?"(관련) 0.469 < "BTS 티켓"(무관) 0.507
+# → 임계값만으로는 완벽 분리 불가. 0.45 미만만 '확실한 무관'으로 즉시 차단하고,
+#   그 이상의 애매한 구간은 LLM 분류기가 무관 여부까지 판단 (2차 방어)
+THRESHOLD = 0.45
+
+LABELS = ["제도", "세제", "상품설명", "추천", "무관"]
+
+CLASSIFY_SYSTEM = (
+    "너는 연금 상담 챗봇의 질문 유형 분류기야. 사용자의 질문을 아래 다섯 유형 중 "
+    "하나로 분류해서 유형 이름만 정확히 출력해.\n\n"
+    "- 제도: 연금·퇴직금 제도의 규정, 가입 조건, 수령 나이, 절차, 계좌·상품의 운용 처리에 대한 질문 "
+    "(예: 국민연금 수령 나이, 퇴직금 중간정산 조건, IRP 가입 자격, "
+    "디폴트옵션 변경 통지를 받으면 어떻게 되나요, 펀드 만기분은 또 대기하나요, "
+    "상품명만 보고 고르면 되나요)\n"
+    "- 세제: 세금, 세액공제, 과세, 세율에 대한 질문 "
+    "(예: 연금저축 세액공제 한도, 연금소득세율, 퇴직소득세 계산)\n"
+    "- 상품설명: 특정 금융상품의 내용·구조·수수료·수익률·위험이나 상품 종류를 묻는 질문 "
+    "(예: 이 펀드 수수료 얼마야, TDF가 뭐야, 이 상품 위험등급은?, "
+    "원리금보장형 상품은 어떤 게 있어?)\n"
+    "- 추천: 사용자에게 맞는 상품이나 전략을 골라달라는 질문 "
+    "(예: 나한테 맞는 연금 상품 추천해줘, IRP랑 연금저축 중 뭐가 나아?)\n"
+    "- 무관: 음식, 연예인, 날씨, 전자기기, 여행처럼 금융·연금과 명백히 관련 없는 일상 질문 "
+    "(예: 오늘 점심 뭐 먹을까, 콘서트 티켓 예매 방법)\n\n"
+    "주의: 상품, 펀드, 만기, 매수, 매도, 변경, 통지, 승인, 납입, 인출, 대기 같은 "
+    "계좌·상품 운용 표현이 하나라도 있으면 절대 무관이 아니야. 문맥이 생략된 짧은 질문도 "
+    "연금 계좌 운용에 대한 것으로 보이면 '제도'로 분류해.\n"
+    "단, 상품의 종류·목록·내용을 묻는 질문('~상품은 어떤 게 있어?', '~가 뭐야?')은 "
+    "제도가 아니라 '상품설명'이야. 애매하면 무관 대신 제도나 상품설명 중 더 맞는 쪽을 선택해.\n\n"
+    "다른 말은 하지 말고 유형 이름 하나만 출력해."
+)
+
+# 유형별 전략: 검색 개수(top_k) + 시스템 프롬프트
+BASE_RULES = (
+    "- 아래 참고 문서의 내용을 근거로만 답변해.\n"
+    "- 문서에 없는 내용은 '제공된 자료에서 확인할 수 없습니다'라고 답해.\n"
+    "- 정확한 수치를 인용하고, 간결하고 이해하기 쉽게 설명해.\n"
+    "- 문서에는 세법 개정 전·후 수치가 섞여 있을 수 있어. 연금저축 세액공제 한도는 "
+    "연 600만원, IRP 합산 900만원이 최신 기준(2023년 이후)이야. 400만원은 과거 기준이므로 "
+    "말하지 마. 연 1,800만원은 '납입' 한도일 뿐 세액공제 한도가 아니야.\n"
+    "- 상품명(펀드, ETF 등)은 참고 문서에 등장하는 것만 언급해. 문서에 없는 상품명을 "
+    "일반 지식으로 지어내거나 나열하지 마.\n"
+    "- 답변에서 출처를 언급할 때는 '[문서3]' 같은 번호가 아니라 각 문서에 표시된 "
+    "실제 출처 파일명(예: doc26.docx, R2_KR5153450009.pdf)으로 써. 번호는 읽는 사람이 "
+    "찾을 수 없어."
+)
+
+TYPE_CONFIG = {
+    "제도": {
+        "top_k": 3,
+        "system": (
+            "너는 미래에셋증권의 연금 전문 상담사야. 지금 질문은 연금·퇴직금 '제도'에 대한 질문이야.\n"
+            + BASE_RULES + "\n"
+            "- 적용 조건(나이, 근속기간, 기한, 자격 요건)을 빠뜨리지 말고 명확히 설명해.\n"
+            "- 조건에 따라 결과가 달라지면 경우를 나눠서 설명해."
+        ),
+    },
+    "세제": {
+        "top_k": 3,
+        "system": (
+            "너는 미래에셋증권의 연금 전문 상담사야. 지금 질문은 연금 관련 '세금·세제'에 대한 질문이야.\n"
+            + BASE_RULES + "\n"
+            "- 세율·한도·공제액 같은 수치는 문서의 숫자를 정확히 인용해.\n"
+            "- 소득 구간이나 납입액 등 조건에 따라 달라지면 구간별로 나눠 설명해.\n"
+            "- '연차'나 '기간'이 붙는 감면·한도를 설명할 때는 그 기준이 무엇인지"
+            "(연금 수령연차인지, 납입 기간인지, 근속기간인지) 문서에 따라 명확히 밝혀. "
+            "예: '연금 수령을 시작한 후 1~10년차'처럼 기준을 함께 써.\n"
+            "- 세금은 받을 금액에서 '차감'되는 거야. 해지·수령 시 실수령액은 원금에서 세금을 "
+            "뺀 금액이며, 절대 원금에 세금을 더해서 '더 많이 받는다'고 계산하지 마.\n"
+            "- 금액 예시를 들 때 단위를 혼동하지 마: 1천만원의 16.5%는 165만원이야. "
+            "만원 단위로 계산했으면 만원 단위로 표기해.\n"
+            "- 참고 문서 맨 위에 [세액공제 계산기 결과]가 있으면, 그 수치를 그대로 사용해서 "
+            "계산 과정을 단계별로 보여주며 설명해. 계산기 결과의 숫자를 바꾸지 마."
+        ),
+    },
+    "상품설명": {
+        "top_k": 3,
+        "system": (
+            "너는 미래에셋증권의 연금 전문 상담사야. 지금 질문은 특정 '금융상품에 대한 설명' 질문이야.\n"
+            + BASE_RULES + "\n"
+            "- 상품의 구조, 수수료, 위험등급, 수익 구조를 사실 그대로 설명해.\n"
+            "- 장점만 말하지 말고 위험과 유의사항도 함께 설명해.\n"
+            "- 여러 상품이 언급되면 항목별로 나눠서 비교해."
+        ),
+    },
+    "추천": {
+        "top_k": 5,  # 추천은 여러 상품을 비교해야 하므로 더 많이 검색
+        "system": (
+            "너는 미래에셋증권의 연금 전문 상담사야. 지금 질문은 상품·전략 '추천' 질문이야.\n"
+            + BASE_RULES + "\n"
+            "- 특정 상품을 단정적으로 추천하지 마. 대신 문서 근거로 선택 기준"
+            "(연령, 투자성향, 세제 혜택, 수수료 등)을 설명해.\n"
+            "- 참고 문서에 실제로 등장하는 상품명은 '문서에 소개된 상품 예시'로 언급할 수 있어. "
+            "이때 문서에 적힌 특징(수수료, 위험등급, 투자 대상 등)을 함께 근거로 제시해.\n"
+            "- 예시 상품은 반드시 사용자 성향과 맞아야 해. 공격형에게 채권혼합·안정형 상품을, "
+            "안정형에게 주식형·고위험 상품을 예시로 들지 마. 성향에 맞는 상품이 참고 문서에 "
+            "없으면 억지로 예시를 만들지 말고 '성향에 맞는 상품 정보가 자료에 없습니다'라고 "
+            "밝힌 뒤 유형 기준으로 안내해.\n"
+            "- 채권혼합·채권형·원리금보장형 상품을 '공격적인 투자자에게 적합하다'고 포장하는 것은 "
+            "금지야. 상품의 위험 수준을 사실과 다르게 성향에 끼워 맞추지 마.\n"
+            "- 사용자가 말한 성향과 원하는 자산 배분이 서로 어긋나면(예: '안정형'이라면서 "
+            "주식 비중 70%를 원함) 그대로 수용하지 말고, 그 배분이 실제로는 어떤 성향에 "
+            "해당하는지 먼저 짚어준 뒤 안내해.\n"
+            "- 예시 상품의 주식·채권 비중이 사용자가 원하는 비중과 다르면 그 차이를 명확히 "
+            "밝혀. 반대 배분인 상품을 요구에 맞는 것처럼 소개하지 마.\n"
+            "- 문서에 없는 상품명은 절대 지어내지 마. 문서에서 관련 상품을 찾지 못했으면 "
+            "'제공된 자료에는 개별 종목 정보가 없습니다'라고 밝힌 뒤 유형과 선택 기준으로 안내해.\n"
+            "- 어떤 경우에도 '이 상품을 사세요'처럼 단정하지 말고, 예시와 기준으로 안내해.\n"
+            "- 투자 판단의 최종 책임은 투자자 본인에게 있다는 점을 자연스럽게 언급해."
+        ),
+    },
+    # 분류 실패 시 폴백: 기존의 범용 프롬프트
+    "일반": {
+        "top_k": 3,
+        "system": (
+            "너는 미래에셋증권의 연금 전문 상담사야.\n" + BASE_RULES
+        ),
+    },
+}
+
+# 무관 질문은 LLM 호출 없이 고정 응답 (비용·지연 절약)
+OFF_TOPIC_ANSWER = (
+    "죄송하지만 저는 미래에셋증권의 연금·퇴직연금 전문 상담사입니다. "
+    "연금 제도, 퇴직금, 세제 혜택, 연금 상품에 대해 질문해 주시면 자세히 안내해 드릴게요."
+)
+
+# ============================================================
+# v8: 멀티턴(대화 이어가기) — 직전 대화를 기억해 후속 질문 처리
+# 오염 방지: 지시어가 있거나, 직전에 봇이 되물었고 짧은 답이 온 경우에만 맥락 사용
+# ============================================================
+from collections import deque
+HISTORY = deque(maxlen=3)  # (질문, 답변) 최근 3개 저장
+
+FOLLOWUP_WORDS = ("그럼", "그거", "그건", "그게", "아까", "방금", "위에서",
+                  "이어서", "앞에서", "그 중", "그중", "말한 거", "말했던")
+
+_DOMAIN_WORDS = ("연금", "IRP", "퇴직", "세액", "공제", "수령", "납입", "인출",
+                 "상품", "펀드", "ETF", "TDF", "세금", "보험", "디폴트")
+
+def is_followup(question):
+    """이번 질문이 직전 대화에 이어지는 후속 질문인지 판정 (오염 방지 위해 보수적으로)"""
+    if not HISTORY:
+        return False
+    if any(w in question for w in FOLLOWUP_WORDS):
+        return True
+    prev_q, prev_a, prev_askback = HISTORY[-1]
+    # 직전 답변이 '되묻기'였고, 사용자가 '대답 형태'(짧고, 물음표·연금 용어 없음)로 응답한 경우
+    if (prev_askback and len(question) <= 20 and "?" not in question
+            and not any(w in question for w in _DOMAIN_WORDS)):
+        return True
+    return False
+
+
+# ============================================================
+# 2주차 추가: 유형별 '행동' — 세제 계산기 / 추천 되묻기
+# ============================================================
+
+# 세제 질문에서 계산에 필요한 숫자 추출 (LLM)
+TAX_EXTRACT_SYSTEM = (
+    "질문에서 연금계좌 세액공제 계산에 필요한 숫자를 추출해 JSON으로만 답해.\n"
+    '형식: {"총급여": 숫자 또는 null, "납입액": 숫자 또는 null}\n'
+    "- 총급여: 연봉·연간 총급여 (만원 단위 숫자로 변환. 예: 4천만원 → 4000)\n"
+    "- 납입액: 연금계좌(IRP·연금저축) 연간 납입액 (만원 단위. 월 납입액이면 12를 곱해 연간으로)\n"
+    '예1: "연봉 4000만원인데 IRP에 연 700만원 넣으면 세액공제 얼마?" → {"총급여": 4000, "납입액": 700}\n'
+    '예2: "연봉 6천에 매달 50만원씩 넣고 있어" → {"총급여": 6000, "납입액": 600}\n'
+    '예3: "연금저축 세액공제 한도 알려줘" → {"총급여": null, "납입액": null}\n'
+    "JSON 외 다른 말은 절대 하지 마."
+)
+
+# 추천 질문에서 사용자 정보 추출 (LLM)
+# v5.1: 질문에 없는 정보를 유추해서 지어내는 문제 수정 (예: 세금 얘기 → '안정 선호' 날조)
+RECO_EXTRACT_SYSTEM = (
+    "질문에서 사용자 정보를 추출해 JSON으로만 답해.\n"
+    '형식: {"나이대": 문자열 또는 null, "투자성향": 문자열 또는 null}\n'
+    "- 반드시 질문에 '직접 쓰여 있는' 표현만 추출해. 질문에 없는 정보는 무조건 null이야.\n"
+    "- 절대 추측하거나 유추하지 마. 세금을 아끼고 싶다거나 수익을 원한다는 말은 "
+    "투자성향이 아니야. 직업(직장인, 알바 등)은 나이가 아니야.\n"
+    '- 나이대: "20대", "35살", "은퇴 5년 남음" 처럼 나이·은퇴 시점이 직접 언급된 경우만\n'
+    '- 투자성향: "안정적인 게 좋아", "공격적으로 투자하고 싶어", "원금 보장 원해" 처럼 '
+    "위험 성향이 직접 언급된 경우만\n"
+    '예1: "30대 공격형인데 뭐가 좋아?" → {"나이대": "30대", "투자성향": "공격형"}\n'
+    '예2: "세금 조금만 내고 싶은데 연금 가입이 좋을까?" → {"나이대": null, "투자성향": null}\n'
+    '예3: "직장인인데 나한테 맞는 상품 추천해줘" → {"나이대": null, "투자성향": null}\n'
+    '예4: "35살 직장인인데 안정적인 게 좋아" → {"나이대": "35살", "투자성향": "안정 선호"}\n'
+    "JSON 외 다른 말은 절대 하지 마."
+)
+
+# ============================================================
+# 3주차 추가: 근거 검증 레이어 (hallucination guard)
+# 답변을 내보내기 전에 참고 문서와 대조 → 근거 없는 내용 삭제/수정
+# 동기: 실제 테스트에서 "연금저축 세액공제 한도 400만원"(옛 기준) 오류 발견 (2026-08-18)
+# ============================================================
+VERIFY = True  # False로 바꾸면 검증 레이어 끔 (비교 실험용)
+
+# [1차] 판정만: 다시 쓸 기회를 주지 않고 JSON으로 불일치 여부만 답하게 함
+VERIFY_CHECK_SYSTEM = (
+    "너는 금융 상담 답변의 사실 검증기야. '참고 문서'와 '답변'을 대조해서 JSON으로만 판정해.\n"
+    "- 답변 속 사실 주장(숫자, 한도, 세율, 조건, 상품 특징)이 문서에 근거가 있는지 확인해.\n"
+    "- [세액공제 계산기 결과]의 수치는 검증된 근거로 인정해.\n"
+    "- 인사말, 고객에게 묻는 질문, '전문가 상담 권장' 같은 일반 안내는 검사 대상이 아니야.\n"
+    "- 표현이 다르더라도 의미가 문서와 같으면 불일치가 아니야.\n"
+    "- 한도·세율 숫자는 특히 엄격하게 대조해. '연금저축 세액공제 한도 400만원'은 과거 기준이므로 "
+    "무조건 불일치로 판정해 (최신 기준은 600만원).\n"
+    "- 계산의 방향도 확인해: 세금은 받을 금액에서 차감되는 것인데, 답변이 원금에 세금을 더해서 "
+    "'원금보다 많이 받는다'는 식으로 계산했다면 불일치로 판정해.\n"
+    "- 답변이 참고 문서 어디에도 등장하지 않는 수치(세율, 보험료율, 한도 등)를 단정적으로 "
+    "말하면 불일치로 판정해. 모델의 일반 지식으로 채운 숫자는 근거가 아니야.\n"
+    "- 답변에 참고 문서에 등장하지 않는 상품명(펀드·ETF 이름 등)이 있으면 불일치로 판정해. "
+    "특히 종목 추천 목록은 문서에 그 이름이 실제로 있는지 하나씩 확인해.\n"
+    "- 곱셈 예시의 단위를 검산해: 예를 들어 1천만원의 16.5%는 165만원이지 16만 5천원이 아니야. "
+    "만원과 원 단위가 뒤섞였으면 불일치로 판정해.\n"
+    '형식: {"불일치": true 또는 false, "사유": "불일치일 때만 30자 이내 한 줄"}\n'
+    '예1: 모두 근거 있음 → {"불일치": false}\n'
+    '예2: 답변은 한도 400만원, 문서는 600만원 → {"불일치": true, "사유": "세액공제 한도가 문서와 다름"}\n'
+    "JSON 외 다른 말은 절대 하지 마."
+)
+
+# [2차] 불일치가 발견됐을 때만 실행: 문서 기준으로 수정
+VERIFY_FIX_SYSTEM = (
+    "너는 금융 상담 답변 교정기야. '참고 문서'와 '답변', '발견된 문제'를 보고 "
+    "문서 기준으로 고친 최종 답변만 출력해.\n"
+    "- 문서에 근거 있는 내용과 [세액공제 계산기 결과] 수치는 그대로 유지해.\n"
+    "- 문서에 없거나 문서와 다른 내용만 삭제하거나 문서 기준으로 고쳐.\n"
+    "- 문서에 없는 상품명(펀드·ETF 종목명)은 절대 다른 상품명으로 바꾸지 말고 통째로 삭제해. "
+    "네가 아는 종목명으로 채우는 것은 금지야. 종목 목록을 삭제했다면 그 자리에 "
+    "'제공된 자료에는 개별 종목 정보가 없어 특정 종목을 안내해 드리기 어렵습니다'라고 쓰고, "
+    "문서에 근거한 선택 기준이나 상품 유형 안내만 남겨.\n"
+    "- 답변의 말투와 구성은 최대한 유지해.\n"
+    "- 설명이나 머리말 없이 수정된 답변만 출력해."
+)
+
+
+def verify_answer(context, draft):
+    """초안을 문서와 대조. (최종 답변, 수정 여부, 사유) 반환. 실패 시 초안 유지."""
+    try:
+        user_msg = f"참고 문서:\n{context}\n\n답변:\n{draft}"
+        text = chat(VERIFY_CHECK_SYSTEM, user_msg, max_tokens=150, temperature=0.1)
+        m = re.search(r"\{.*\}", text or "", re.S)
+        verdict = json.loads(m.group()) if m else {}
+        if not verdict.get("불일치"):
+            return draft, False, ""      # 판정: 이상 없음 → 초안 그대로
+        reason = str(verdict.get("사유", "문서와 불일치"))[:60]
+        fixed = chat(VERIFY_FIX_SYSTEM,
+                     user_msg + f"\n\n발견된 문제: {reason}",
+                     max_tokens=600, temperature=0.1)
+        if fixed and len(fixed.strip()) >= 30:
+            return fixed.strip(), True, reason
+    except Exception:
+        pass
+    return draft, False, ""              # 검증 실패 → 초안 유지
+
+
+# 상품설명 중 '비교' 질문 감지 → 비교 테이블 모드
+COMPARE_KEYWORDS = ["비교", "차이", "뭐가 나아", "뭐가 좋아", "어떤 게 나", "어떤게 나",
+                    " 중에", "중에서", "vs", "VS", "랑 뭐가", "이랑 ",
+                    "뭐가 달라", "어떻게 달라", "다른 점", "다른점",
+                    "싼 게", "싼게", "저렴한", "어느 게", "어느게", "나은 게", "나은게"]
+
+COMPARE_SYSTEM = (
+    "너는 미래에셋증권의 연금 전문 상담사야. 지금 질문은 여러 금융상품을 '비교'해달라는 질문이야.\n"
+    + BASE_RULES + "\n"
+    "- 반드시 마크다운 표로 비교해. 첫 열은 비교 항목, 나머지 열은 각 상품.\n"
+    "- 비교 항목은 문서에서 확인되는 것만 사용해: 상품 유형, 수수료(보수), 위험등급, "
+    "수익 구조, 세제 혜택, 유의사항 등.\n"
+    "- 문서에서 확인되지 않는 칸은 '자료 없음'이라고 적어 (지어내지 마).\n"
+    "- 표 아래에 핵심 차이를 2~3문장으로 요약해.\n"
+    "- 특정 상품이 무조건 좋다고 단정하지 마."
+)
+
+
+# 추천인데 사용자 정보가 전혀 없을 때: 답변 대신 되묻기
+ASK_BACK_SYSTEM = (
+    "너는 미래에셋증권의 연금 전문 상담사야. 사용자가 상품 추천을 원하지만 "
+    "나이대·투자성향 정보가 전혀 없어서 바로 추천하면 안 되는 상황이야.\n"
+    "- 먼저 '고객님께 맞는 추천을 드리기 위해 두 가지만 여쭤볼게요'라며 "
+    "나이대(또는 은퇴까지 남은 기간)와 투자성향(안정형/공격형)을 정중히 질문해.\n"
+    "- 그다음 아래 참고 문서를 근거로 일반적인 선택 기준(연령·성향·세제혜택·수수료)만 "
+    "간단히 3~4문장으로 안내해.\n"
+    "- 특정 상품을 단정적으로 추천하지 마.\n"
+    "- 문서에 없는 내용은 말하지 마."
+)
+
+
+def calc_pension_tax_credit(salary, paid):
+    """연금계좌(연금저축+IRP) 세액공제 계산기 — 문서 기준 반영
+    salary: 총급여(만원), paid: 연간 납입액(만원)"""
+    LIMIT = 900  # 연금계좌 합산 세액공제 한도 900만원 (연금저축 단독은 600만원)
+    if salary <= 5500:  # 총급여 5,500만원 이하 (종합소득 4,500만원 이하)
+        rate, rate_txt = 0.165, "16.5%"
+        band = "총급여 5,500만원 이하"
+    else:
+        rate, rate_txt = 0.132, "13.2%"
+        band = "총급여 5,500만원 초과"
+    base = min(paid, LIMIT)
+    credit = base * rate
+    lines = [
+        "[세액공제 계산기 결과]",
+        f"- 총급여: {int(salary):,}만원 → {band} → 공제율 {rate_txt} (지방소득세 포함)",
+        f"- 연간 납입액: {int(paid):,}만원 → 공제 대상 금액: {int(base):,}만원 "
+        f"(연금계좌 세액공제 한도 900만원 적용)",
+        f"- 예상 세액공제액: {int(base):,}만원 × {rate_txt} = 약 {credit:,.1f}만원",
+    ]
+    if paid > LIMIT:
+        lines.append(f"- 참고: 한도(900만원)를 초과한 {int(paid - LIMIT):,}만원은 세액공제 대상이 아님")
+    return "\n".join(lines)
+
+
+def post_with_retry(url, payload, timeout=60, tries=5):
+    """API 호출 공통 함수: 실패하면 쉬었다 재시도.
+    v7.5: 속도 제한(429)은 더 길게 기다리며 5회까지 재시도 (연속 질문 심사 대비)"""
+    last_err = None
+    for i in range(tries):
+        wait = 1.5 * (i + 1)
+        try:
+            r = requests.post(url, headers=HEADERS, json=payload, timeout=timeout)
+            if r.status_code == 200:
+                return r
+            last_err = Exception(f"HTTP {r.status_code}")
+            if r.status_code == 429:  # 속도 제한: 충분히 길게 대기
+                wait = 6.0 * (i + 1)  # 6초 → 12초 → 18초 → 24초
+        except Exception as e:
+            last_err = e
+        time.sleep(wait)
+    raise last_err
+
+
+def chat(system, user_msg, max_tokens=500, temperature=0.3):
+    """HCX-005 호출 공통 함수 (재시도 포함)"""
+    body = {
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_msg},
+        ],
+        "maxTokens": max_tokens,
+        "temperature": temperature,
+    }
+    res = post_with_retry(CHAT_URL, body, timeout=60)
+    return res.json().get("result", {}).get("message", {}).get("content", "")
+
+
+def classify(question):
+    """질문을 5개 유형 중 하나로 분류. 실패하면 '일반'(폴백)."""
+    try:
+        text = chat(CLASSIFY_SYSTEM, question, max_tokens=10, temperature=0.1)
+        for label in LABELS:
+            if label in text:
+                return label
+    except Exception:
+        pass
+    return "일반"
+
+
+def extract_json(system, question):
+    """LLM으로 질문에서 정보를 JSON 형태로 추출. 실패하면 빈 dict."""
+    try:
+        text = chat(system, question, max_tokens=100, temperature=0.1)
+        m = re.search(r"\{.*\}", text, re.S)
+        if m:
+            return json.loads(m.group())
+    except Exception:
+        pass
+    return {}
+
+
+def to_num(v):
+    """추출값을 숫자로 안전 변환 (실패 시 None)"""
+    try:
+        n = float(v)
+        return n if n > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def search(question, top_k=5):
+    """하이브리드 검색: 임베딩(의미) + BM25(키워드) 순위 결합(RRF).
+    반환: (문서 목록, 각 문서의 임베딩 유사도, 임계값 판정용 최고 임베딩 유사도)"""
+    res = post_with_retry(EMB_URL, {"text": question}, timeout=30)
+    q = np.array(res.json()["result"]["embedding"])
+    q = q / np.linalg.norm(q)
+    emb_scores = matrix @ q
+    top_score = float(emb_scores.max())  # 무관 판정은 기존처럼 임베딩 기준 유지
+
+    if HYBRID:
+        kw_scores = bm25_scores(question)
+        # 점수 정규화 결합: 임베딩(의미) 0.6 + 키워드(정확 용어) 0.4
+        def _norm(x):
+            span = x.max() - x.min()
+            return (x - x.min()) / span if span > 0 else np.zeros_like(x)
+        fused = 0.6 * _norm(emb_scores) + 0.4 * _norm(kw_scores)
+        order = np.argsort(-fused)[:top_k]
+    else:
+        order = np.argsort(-emb_scores)[:top_k]
+
+    docs = [chunks[idx_list[i]] for i in order]
+    doc_scores = [float(emb_scores[i]) for i in order]
+    return docs, doc_scores, top_score
+
+
+@app.get("/answer")
+def answer(question_id: str, question: str):
+    try:
+        # [0단계] 멀티턴: 후속 질문이면 직전 대화를 검색·이해에 반영
+        q_search, q_llm, mt_note = question, question, ""
+        if is_followup(question):
+            prev_q, prev_a, _ = HISTORY[-1]
+            q_search = prev_q + " " + question          # 검색용: 이전 질문과 합쳐서 검색
+            q_llm = (f"(이전 대화) 사용자: {prev_q} / 상담사: {prev_a[:400]}\n"
+                     f"(현재 질문) {question}")           # LLM용: 대화 맥락 포함
+            mt_note = "0) 멀티턴 맥락 감지: 직전 대화 반영 "
+
+        # [1단계] 검색: 최대 5개를 미리 검색해두고, 유형에 따라 사용 개수 결정
+        found, scores, top_score = search(q_search, top_k=5)
+
+        # [2단계] 임계값 필터: 확실한 무관은 LLM 호출 없이 즉시 응답
+        if top_score < THRESHOLD:
+            trace = (f"{mt_note}1) {SEARCH_MODE} 검색으로 {len(idx_list)}개 청크 비교 "
+                     f"(최고 유사도 {top_score:.3f}) "
+                     f"2) 임계값 {THRESHOLD} 미달 → '무관' 판정 "
+                     f"3) 검색·답변 생성 생략 (비용 절약)")
+            return {
+                "question_id": question_id,
+                "question": question,
+                "retrieved_context": "",
+                "think_trace": trace,
+                "answer": OFF_TOPIC_ANSWER,
+            }
+
+        # [3단계] LLM 유형 분류 (제도/세제/상품설명/추천, 안전망으로 무관도 포함)
+        qtype = classify(q_llm)
+        if qtype == "무관":  # 유사도는 높지만 LLM이 무관으로 판단한 경우 (2차 방어)
+            trace = (f"{mt_note}1) {SEARCH_MODE} 검색으로 {len(idx_list)}개 청크 비교 "
+                     f"(최고 유사도 {top_score:.3f}) "
+                     f"2) 임계값 통과했으나 LLM 분류 결과 '무관' → 답변 생성 생략")
+            return {
+                "question_id": question_id,
+                "question": question,
+                "retrieved_context": "",
+                "think_trace": trace,
+                "answer": OFF_TOPIC_ANSWER,
+            }
+
+        # [4단계] 유형별 전략: 검색 개수 + 전용 프롬프트 + 유형별 '행동'
+        config = TYPE_CONFIG[qtype]
+        system = config["system"]
+        k = config["top_k"]
+        action_note = ""  # trace에 남길 행동 기록
+        was_askback = False  # 이번 답변이 되묻기였는지 (멀티턴 후속 판정용)
+
+        # [4-0] 복합 질문 감지 (v7.8): 여러 요구사항이 담긴 질문은
+        # 문서를 더 검색하고 "빠짐없이 답하라" 지시를 추가 (평가지표 '요구사항 충족' 대응)
+        MULTI_HINTS = ("그리고", "또한", " 및 ", "각각", "도 알려", "도 궁금",
+                       "뭐고", "얼마고", "어떻게 되고", "이랑 ", "랑 ")
+        is_multi = (question.count("?") >= 2 or
+                    (len(question) >= 30 and any(h in question for h in MULTI_HINTS)))
+        if is_multi:
+            k = max(k, 5)
+            system = system + (
+                "\n- 이 질문에는 여러 요구사항이 담겨 있어. 요구사항을 각각 항목으로 "
+                "나눠서 하나도 빠짐없이 답해. 일부만 답하고 끝내지 마."
+            )
+            action_note += " + 복합 질문 감지(문서 5개, 누락 금지)"
+
+        used = found[:k]
+        context = "\n\n".join(f"[문서{i+1}] (출처: {c['source']})\n{c['text']}"
+                              for i, c in enumerate(used))
+
+        # [4-c] 상품설명 → 비교 질문이면 비교 테이블 모드 (문서 5개 + 표 생성 지시)
+        if qtype == "상품설명" and any(kw in q_llm for kw in COMPARE_KEYWORDS):
+            system = COMPARE_SYSTEM
+            k = 5
+            used = found[:k]
+            context = "\n\n".join(f"[문서{i+1}] (출처: {c['source']})\n{c['text']}"
+                                  for i, c in enumerate(used))
+            action_note = " → 비교 질문 감지: 비교 테이블 모드"
+
+        # [4-a] 세제 → 계산기 실행: 질문에 연봉·납입액이 있으면 파이썬으로 직접 계산
+        if qtype == "세제":
+            info = extract_json(TAX_EXTRACT_SYSTEM, q_llm)
+            salary = to_num(info.get("총급여"))
+            paid = to_num(info.get("납입액"))
+            if salary and paid:
+                calc_result = calc_pension_tax_credit(salary, paid)
+                context = calc_result + "\n\n" + context
+                action_note = (f" → 계산기 실행 (총급여 {int(salary):,}만원, "
+                               f"납입액 {int(paid):,}만원 추출)")
+
+        # [4-b] 추천 → 되묻기: 나이·투자성향 정보가 없으면 답변 대신 질문
+        if qtype == "추천":
+            info = extract_json(RECO_EXTRACT_SYSTEM, q_llm)
+            age = info.get("나이대")
+            risk = info.get("투자성향")
+            if not age and not risk:
+                system = ASK_BACK_SYSTEM
+                was_askback = True
+                action_note = " → 사용자 정보 없음: 되묻기 모드"
+            else:
+                system = system + (
+                    f"\n- 사용자 정보: 나이대={age or '모름'}, 투자성향={risk or '모름'}. "
+                    "이 정보에 맞는 선택 기준을 중심으로 답변해."
+                )
+                action_note = f" → 맞춤 모드 (나이대={age or '?'}, 투자성향={risk or '?'})"
+
+                # [4-b-1.5] 성향 모순 감지 (v8.5): 안정·공격 표현이 함께 추출되면
+                # '운'에 맡기지 않고 교정 지시를 확정적으로 주입
+                _r = str(risk or "")
+                if (any(k in _r for k in ["안정", "보수", "원금"])
+                        and any(k in _r for k in ["공격", "성장", "고수익"])):
+                    system += (
+                        "\n- 주의: 사용자의 성향 표현이 서로 모순돼 (안정 지향과 공격 지향이 "
+                        "함께 있음). 답변 첫머리에서, 사용자가 말한 자산 배분이 실제로는 어떤 "
+                        "투자 성향(예: 주식 비중이 높으면 성장·적극형)에 해당하는지 명확히 "
+                        "짚어준 다음에 상품을 안내해. 모순을 못 본 척 넘어가지 마."
+                    )
+                    action_note += " + 성향 모순 감지(교정 지시 주입)"
+
+            # [4-b-2] 상품 검색 보강: 투자설명서 청크를 추가로 검색해서
+            # 문서에 실제 등장하는 상품을 예시로 들 수 있게 함
+            # v7.3: 성향에 맞는 상품 설명서가 검색되도록 보강 검색어를 성향별로 조정
+            try:
+                extra_kw = " 연금 펀드 상품 투자설명서 수수료 위험등급"
+                risk_str = str(risk or "")
+                if any(k in risk_str for k in ["공격", "고수익", "성장", "주식"]):
+                    # 문서가 실제로 쓰는 표현으로 검색 (BM25 정확 매칭 유도)
+                    extra_kw += " 주로 주식에 투자하는 주식형 성장 투자신탁(주식)"
+                elif any(k in risk_str for k in ["안정", "보수", "원금", "안전"]):
+                    extra_kw += " 채권에 주로 투자하는 채권형 안정형 원리금보장"
+                extra_found, _, _ = search(q_search + extra_kw, top_k=3)
+                seen = {c["text"] for c in used}
+                added = [c for c in extra_found if c["text"] not in seen]
+                if added:
+                    used = used + added
+                    context = "\n\n".join(f"[문서{i+1}] (출처: {c['source']})\n{c['text']}"
+                                          for i, c in enumerate(used))
+                    action_note += f" + 상품 검색 보강({len(added)}개 문서 추가)"
+            except Exception:
+                pass  # 보강 실패해도 기본 검색 결과로 진행
+
+        user_msg = f"참고 문서:\n{context}\n\n질문: {q_llm}"
+        # 비교 테이블은 표가 길어질 수 있어 토큰 여유를 더 줌
+        out_tokens = 700 if system is COMPARE_SYSTEM else 500
+        ans = chat(system, user_msg, max_tokens=out_tokens, temperature=0.3)
+        if not ans:
+            ans = "답변 생성에 실패했습니다."
+
+        # [5단계] 근거 검증 레이어: 답변을 문서와 대조해 근거 없는 내용 제거/수정
+        verify_note = ""
+        if VERIFY and ans != "답변 생성에 실패했습니다.":
+            checked, changed, reason = verify_answer(context, ans)
+            if changed:
+                verify_note = f" 6) 근거 검증: 불일치 발견({reason}) → 답변 수정됨"
+            else:
+                verify_note = " 6) 근거 검증: 이상 없음"
+            ans = checked
+
+        # [7단계] 출처 표기: 평가 기준 대응 — 사용한 문서의 출처를 답변 본문에 자동 명시
+        srcs = []
+        for c in used:
+            if c["source"] not in srcs:
+                srcs.append(c["source"])
+        if srcs:
+            ans = ans.rstrip() + "\n\n[참고 문서] " + ", ".join(srcs)
+
+        trace = (f"{mt_note}1) {SEARCH_MODE} 검색으로 {len(idx_list)}개 청크 비교 "
+                 f"2) 임계값 {THRESHOLD} 통과 (최고 유사도 {top_score:.3f}) "
+                 f"3) LLM 유형 분류: '{qtype}'{action_note} "
+                 f"4) 상위 {k}개 문서 검색 (유사도: {', '.join(f'{s:.3f}' for s in scores[:k])}) "
+                 f"5) '{qtype}' 전용 프롬프트로 HCX-005 답변 생성"
+                 f"{verify_note} 7) 참고 문서 출처 표기")
+
+        HISTORY.append((question, ans, was_askback))  # 멀티턴용: 대화 저장 (무관 답변은 저장 안 함)
+        return {
+            "question_id": question_id,
+            "question": question,
+            "retrieved_context": context,
+            "think_trace": trace,
+            "answer": ans,
+        }
+    except Exception as e:
+        return {
+            "question_id": question_id,
+            "question": question,
+            "retrieved_context": "",
+            "think_trace": f"오류 발생: {e}",
+            "answer": "일시적인 오류가 발생했습니다.",
+        }

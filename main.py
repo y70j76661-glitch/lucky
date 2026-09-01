@@ -1,4 +1,4 @@
-# main.py  v9.54  (2026-08-31)
+# main.py  v9.80  (2026-09-01)
 #  v9.13: ①계산기 결과 코드 강제 ②기한 문맥화 ③비교표 행수 강제·HTML 제거
 #         ④(구)개인연금저축 구분·5년 요건 ⑤문서밖 파생계산 금지 ⑥가입자격 구분
 #  v9.14: ⑦'자료에 없다' 뒤 외부지식 덧붙이기 코드 절단 ⑧중도해지 이중과세 차단
@@ -107,11 +107,164 @@
 #         겹침 숫자로는 둘을 못 가른다. 기한은 '무엇을 언제까지 하느냐'이므로
 #         질문이 그 '행위'(넣다·이전·전환·만기·인출…)를 다룰 때만 강제한다.
 #         R13 '넣으면' → 강제 / A43 '가입할 수 있어요' → 강제 안 함.
+#  v9.55: (75)과세제외금액(세액공제를 받지 않은 납입금)에 기타소득세를 붙이는 오류.
+#         실측: '나머지 900만원'을 설명하며 "인출한 금액에 16.5% 부과"라고 했다.
+#         R38의 정반대 방향 오류 → 예외를 코드가 한 줄로 못박는다.
+#         (76)소득 미상인데 금액을 하나로 확정하는 문제(R31의 변종). 구간 계산기가
+#         돌았으면 두 경우를 코드가 명시한다.
+#         (77)카드 문구 '두 세율은 둘 중 하나만 적용'이 답변에서 '둘 중 하나의 소득
+#         구간에 맞춰'로 변형돼 나왔다 → 문구를 오해 없게 고친다.
+#  v9.56: (78)**조건을 답변이 아니라 질문에 건다.**
+#         v9.55의 과세제외 고지는 조건이 `"기타소득세" in ans` 였다. ans는 매번
+#         달라지는 LLM 출력이라 조건 자체가 확률적이 됐고 R53이 재발했다.
+#         질문은 고정 입력이므로 흔들리지 않는다. 앞으로 새 규칙의 조건은
+#         '질문' 또는 '코드가 계산한 값'에만 건다.
+#  v9.57: (79)PDF 쪽번호·머리글 제거를 '우리가 붙이는 기한 문장'에서 '답변 전체'로
+#         넓힌다. 모델이 참고 문서 원문을 그대로 베껴 적으면 v9.53의 정리는
+#         걸리지 않았다(R51 흔들림).
+#  v9.58: (80)무관 응답이 '능력 밖'처럼만 들렸다 → '제공된 자료를 근거로만 답한다'는
+#         이유를 밝힌다(평가지표 정보한계 대응·근거 기반).
+#         (81)'자료에서 확인할 수 없다'로 끝난 답변에 검색된 문서를 근거처럼 달면
+#         오해를 만든다(실측: 핀테크 허브 질문에 투자설명서 3건이 붙음)
+#         → 그 문서들이 근거가 아니라 '함께 조회된 자료'임을 밝힌다.
+#  v9.59: (82)'자료 없음' 각주가 '코드가 행을 추가했을 때'에만 붙었다. 모델이 스스로
+#         자료 없음을 쓰면 각주가 빠졌다(R44 흔들림) → 표에 자료 없음이 있으면
+#         누가 썼든 각주를 붙인다.
+#         (83)표 칸 안의 추측어는 신호어가 없어도 걷어낸다. 칸에는 문서에서 읽은
+#         사실만 들어가야 한다(R47 재발: '동일할 것으로 예상됨').
+#  v9.60: (84)추측 신호어에 '제공'이 빠져 있었다 — "수수료 정보는 제공되지 않았으나
+#         일반적으로 비용이 더 높을 수 있습니다"가 그대로 나갔다.
+#         (85)표 재생성 예산 22초 → 40초. 실측: 첫 생성이 표를 0줄로 내고 재생성이
+#         7줄로 살리는 일이 잦은데, 예산에 막혀 건너뛰면 표가 통째로 사라진다(R27).
+#         정확성이 시간보다 우선이다.
+#         (86)마크다운 이스케이프(\~, \*, \_)가 화면에 그대로 노출되는 것 정리.
+#  v9.61: (87)위험등급 정리는 '상품을 비교한 답변'에 붙는 것이다. 표가 없으면
+#         겹침 점수가 아무리 높아도 붙이지 않는다(R50 흔들림). 겹침 숫자로
+#         씨름할 문제가 아니라 기준이 잘못 잡혀 있었다.
+#         (88)표 재생성을 최대 2회까지 (예산 안에서). 첫 생성이 표를 0줄로 내는
+#         일이 잦은데 재생성 1회로는 확률이 남는다(R27 흔들림).
+#         (89)비교 프롬프트 첫 줄에 '표부터 쓰라'는 지시를 못박는다.
+#  v9.62: (90)대괄호 없는 '문서1에 따르면'이 그대로 노출됐다. [문서N]만 막고 있었다.
+#         (91)내부 파일명을 사용자 안내처럼 쓰는 문장 교정 —
+#         "(출처: doc9.pdf)에서 확인하실 수 있습니다"는 사용자가 열 수 없는 곳을
+#         가리킨다. 출처는 답변 말미 [참고 문서]로만 밝힌다.
+#  v9.63: (92)스캔 문서에서 뽑힌 청크 일부가 문장이 끊기고 글자가 깨져 있다.
+#         (실측: doc22 5/5, doc54 13/14, doc9 3/4 — 하필 연금 안내문서에 몰려 있다)
+#         모델이 끊긴 문장을 이어 붙여 없는 인과관계를 만들었다
+#         ("8시 30분~9시 29분에 주문하면 미수가 발생하지 않는다").
+#         → 깨진 근거가 섞이면 '이어 붙이지 마라'를 코드가 카드로 주입한다.
+#  v9.64: (93)새 실패 유형 — 사실을 정확히 옮긴 뒤 '이유'를 지어낸다.
+#         실측: 문서에는 "변경 불가하며 오류메시지가 나옵니다"뿐인데, 답변은
+#         "…아닌 것으로 간주되기 때문입니다"라고 이유를 창작했다.
+#         사실이 맞으니 근거 검증도 통과한다 → 별도 방어가 필요하다.
+#         모델이 스스로 추론했음을 드러내는 동사(간주/판단/해석/추정되기 때문)를
+#         코드가 지우고, 프롬프트에도 '이유가 문서에 없으면 붙이지 마라'를 넣는다.
+#  v9.65: (94)429(속도 제한)로 답변 자체를 못 한 사례. 심사에서 나면 그 문항이
+#         통째로 날아간다 → 429일 때만 재시도를 4회로 늘리고 대기를 4/8/14초로.
+#         (95)v9.63의 원문 인식 카드가 과했다. '온전한 문장이 없으면 확인되지
+#         않는다고 밝혀라'를 모델이 '답을 포기할 핑계'로 썼다(유사도 0.6대인데
+#         자료 없음). → 깨진 부분은 조심하되 읽히는 부분은 반드시 쓰라고 바꾼다.
+#         (96)'이는 곧 ~를 시사합니다' 같은 추론 결론 제거. 문서는 '융자잔고가
+#         있는 계좌는 이관 불가'라고만 했는데 '담보대출 불가'를 끌어냈다.
+#  v9.66: 기한 보강 블록이 세 가지 사고를 냈다(실측 pension 세트).
+#         (97)깨진 문장이 그대로 사용자에게 나갔다 ("11103@56「08.01.1", "ㅁ0-5일까지").
+#         v9.63 카드는 '생성'에만 영향을 주고 코드가 붙이는 블록은 안 걸렀다.
+#         (98)답변이 '자료 없음'인데 기한만 붙였다(#9: 주식 현물이전 질문에 ISA 60일).
+#         (99)기한 문장에 구 기준 세율표가 통째로 딸려 나왔다(소득세 14.0% 계 15.4%).
+#         → 깨진 문장·숫자표는 기한 블록에서 제외하고, 답이 없으면 붙이지 않는다.
+#  v9.67: (100)사용자 말과 문서 말이 달라 검색이 못 잇는 경우가 있다.
+#         실측: 사용자 '예수금'(6청크, 회사 연혁) vs 문서 '현금성자산·대기성자금'
+#         (112·177청크에 "대기기간 동안의 현금은 대기성자금으로 운용됩니다"가 있음).
+#         '보험사에서 가져오기' vs 문서 '계약이전·실물이전·타사 이관'도 같다.
+#         → 질문에 사용자 표현이 있으면 문서 표현을 BM25 쿼리에 더한다.
+#         임베딩은 건드리지 않는다(의미 검색은 이미 잘 동작하고 있으므로).
+#  v9.68: 기한 블록을 한 번 더 좁힌다(v9.66으로도 새는 것이 있었다).
+#         (101)표 조각('|'이 든 문장)은 기한으로 쓰지 않는다 — 실측 두 건 모두
+#         '|'가 들어간 표 조각이었고 글자가 깨져 있었다('되직연금', '직 지탄').
+#         (102)답변이 '자료에 없다'로 시작하면 길이와 무관하게 기한을 붙이지 않는다.
+#         v9.66은 120자 이하만 걸러서, 뒤에 설명이 붙은 경우가 새어 나갔다.
+#  v9.69: (103)**정반대 오답**을 냈다. doc3에 연금저축계좌 증권담보융자의 만기·이자·
+#         반대매매·해지상환 규정이 다 있는데 "담보대출이 불가합니다"라고 답했다.
+#         '담보가 걸리면 해지 불가'를 '대출 불가'로 뒤집은 것이다.
+#         → 문서에 세부 운영 규정이 있으면 그 제도가 불가능하다고 말하지 못하게 한다.
+#         (104)'주식'과 문서의 '지분증권'이 안 이어졌다. doc34에 '지분증권/리츠는
+#         실물이전 불가'가 코드표로 있는데 '확인할 수 없다'고 답했다.
+#  v9.70: (105)용어 확장(BM25)만으로는 부족했다 — 최종 순위가 임베딩 0.6과 섞여
+#         해당 청크가 상위 5에 못 들었다(R60 재발). 보수표를 직접 끌어오는
+#         v9.20과 같은 방식으로, 특정 질문에는 필요한 청크를 코드가 찾아 넣는다.
+#  v9.71: (106)v9.69~70의 '주식↔지분증권'은 내 오판이었다. doc34의 '실물이전
+#         불가사유'는 계좌를 다른 금융사로 옮길 때의 이야기이고, 질문은 일반
+#         주식계좌 → 연금계좌 입고였다. 맥락이 다르다.
+#         모델의 '확인할 수 없다'가 맞았다. 확장·보강 조건을 좁힌다.
 #         (보강 문장은 붙었는데 틀린 이유가 함께 남아 있던 간헐 실패 R40)
 import os, json, re, time, requests
 import numpy as np
 from fastapi import FastAPI
 from dotenv import load_dotenv
+#  v9.72: (107)R44 흔들림의 진짜 원인. 비교표의 열 이름은 모델이 띄어쓰기를
+#         섞어 쓴다 — 표 '미래에셋 코어밸류 연금저축증권전환형' vs 문서
+#         '미래에셋코어밸류연금저축증권전환형자투자신탁1호(주식)'. 글자 그대로
+#         비교하니 한 칸도 못 맞췄고(교정 0칸), 그 뒤 '이 답변과 관련된 상품'
+#         판정까지 흔들려 위험등급 정리가 붙었다 말았다 했다.
+#         → 열 이름과 상품명을 같은 규칙(_GENERIC 제거)으로 정규화해 잇는다.
+#         (108)더 중요한 문제가 같이 드러났다. 표가 등급을 2개 말하는데 코드가
+#         원문에서 확인한 상품이 1개뿐이면, 확인 못 한 등급이 검증된 값처럼
+#         조용히 나갔다. → 그럴 때는 '대조하지 못했다'를 반드시 밝힌다.
+#         (109)추적 문구가 거짓말을 했다. fix_risk_claims가 아무 일도 안 하고
+#         돌아온 경우에도 '위험등급 정리'가 찍혔다 → 실제 한 일만 적는다.
+#  v9.73: (110)회귀 R52가 흔들렸는데 코드 결함이 아니었다. 그 회차에 예외가 났고
+#         except가 원인을 통째로 삼켰다 — 남은 흔적은 "일시적인 오류" 한 줄뿐.
+#         실측: 같은 질문 5회 재실행은 5/5 정상. 즉 '가끔 나는 예외'가 있는데
+#         무엇인지 알 방법이 없었다.
+#         → ① 예외 종류·발생 줄을 trace에 드러내고 error.log에 남긴다
+#           ② 심사는 질문당 1회뿐이므로, 일시적 오류면 통째로 한 번 더 시도한다
+#           ③ 회귀 테스트가 '서버 오류'와 '품질 실패'를 구분해 보고한다
+#  v9.74: (111)v9.72가 R50을 흔들었다. '원문 대조 불가' 경고가 '위험등급 정리'와
+#         같은 표식을 썼다 — 두 카드는 전혀 다른 말을 하는데 이름이 같으니
+#         '등급 정리를 붙이지 마라'는 규칙이 경고까지 막았다(또는 반대로 뚫렸다).
+#         → 표식을 분리한다. 다른 사실에는 다른 이름을 준다.
+#         (112)R25의 '만 55세' 요건이 프롬프트 규칙으로만 있어 회차마다 빠졌다.
+#         문서에 확정적으로 적힌 요건은 코드가 붙인다 — 프롬프트는 확률이다.
+#  v9.75: (113)garble_score의 홑글자 항이 정상 한국어를 깨진 것으로 판정했다.
+#         실측(사냥 710건): "본인이 낸 금액", "DC 별 추가 내용", "두 상품에 대한"
+#         — 한 글자 단어 하나로 0.25가 나왔고, 진짜 깨진 문장도 0.25였다.
+#         lone/어절수 × 3.0 이 한 개만으로 상한에 닿기 때문이다.
+#         제품 영향: 기한 블록이 GARBLE_STRICT(0.15)로 거르므로,
+#         정상적인 기한 문장이 홑글자 하나 때문에 버려지고 있었다(답변이 덜 자세해짐).
+#         → 홑글자는 '밀도'가 신호다. 2개까지는 정상으로 보고 3개째부터 센다.
+#  v9.76: 사냥 710건에서 실제 결함 둘을 찾았다(크레딧 추가 소모 없이 저장본에서).
+#         (114)'[문서1, 문서2]'처럼 여러 개를 묶은 내부 순번이 그대로 나갔다.
+#         v9.1의 정규식은 '[문서2]' 단독만, v9.62는 대괄호 없는 형태만 잡았다.
+#         실측 P0013: "…보유하게 될 수도 있습니다. [문서1, 문서2] [참고 문서] doc29.xlsx"
+#         (115)본문 한가운데 '(출처: doc29.xlsx)'가 나갔다. v9.62에서 "출처는 답변
+#         말미 [참고 문서]로만"이라고 정해놓고 코드(_to_source)가 스스로 어겼다.
+#         사용자는 doc29.xlsx를 열 수 없다 — 본문에 파일명이 있을 이유가 없다.
+#  v9.77: 재채점(rescan)에서 나온 세 가지.
+#         (116)줄바꿈이 사라져 표의 여러 행이 한 줄에 붙었다(실측 5건 — P0245 등:
+#         "| 주요 투자 비중 | … | 비교지수 | … | KOBI 120 x 100"). 표는 화면에
+#         그대로 나가므로 머리글 칸수 기준으로 코드가 행을 다시 편다.
+#         (117)'법 제 74조 제 1항'의 '제'가 홑글자로 반복돼 정상 법조문이 깨진
+#         원문으로 판정됐다 → 흔한 홑글자 단어를 예외 목록에 추가.
+#         (118)과세제외 고지의 트리거 '나머지'가 너무 넓었다. 디폴트옵션 질문
+#         ("나머지 2천만원은 어떻게 되나요")에 세제 카드가 붙었다 → 인출·해지
+#         문맥어만 남기고, 운용지시·디폴트옵션 문맥이면 붙이지 않는다.
+#  v9.78: v9.77이 핵심 회귀 2건을 깨뜨렸다 — 둘 다 즉시 원상 교정.
+#         (119)R53: '나머지'를 트리거에서 뺐더니 정작 필요한 질문("나머지 900만원은
+#         뭐예요?")에서 과세제외 고지가 빠졌다. → '나머지·초과·찾'은 질문에
+#         세금 문맥어(세액공제·공제·과세 등)가 같이 있을 때만 발동한다.
+#         (120)R50: 위험등급 정리 카드가 _rel(바이그램 추측)로 '관련 상품'을 골라
+#         TDF2045 질문에 이웃 TDF 상품 등급을 붙였다. 추측을 없앤다 —
+#         카드는 '표의 열과 실제로 이어진 상품(matched)'만 다룬다.
+#         열이 2개 못 이어졌는데 표가 등급을 말하면 '대조 불가' 경고만 붙는다.
+#  v9.79: (121)fix_table_rows가 '칸 수가 맞는 행'은 건드리지 않았는데, 끝의 '|'가
+#         빠진 행은 칸 수는 맞아도 '|' 개수가 달라 화면이 깨진다(실측 R27·R45 —
+#         새 표 불변식이 즉시 잡아냈다). → 모든 표 줄을 규격(| a | b |)으로 다시 쓴다.
+#         (122)사냥 실측 두 가지 창작 제거: '금융소비자보호법(FINRA)' — FINRA는
+#         미국 기관이다(P0323). '만기일 당일은 포함되지 않아 59일째' — 문서에 없는
+#         달력 해석을 지어냈다(P0310). 문서에 없으면 코드가 지운다.
+#  v9.80: (123)문서에 없는 연도 차단. 실측 P0167: 문서의 '2023년 7월 12일'을
+#         '2028년 7월 12일'로 바꿔 말했다(코퍼스 전체에 2028은 0건). 날짜가 틀리면
+#         규정 자체가 왜곡된다 — 근거·질문 어디에도 없는 연도가 든 문장은 지운다.
 
 load_dotenv()
 API_KEY = os.getenv("CLOVA_API_KEY")
@@ -246,8 +399,8 @@ ASK_RISK_LINE = ("참고로, 투자 성향이 원금 보전을 중시하는 안�
 # v9.28: 정확성이 속도보다 우선이므로 예산은 '최후의 안전장치'로만 둔다.
 #   구조 개선(불필요한 표 재생성 제거)으로 시간을 벌었으니 여유를 늘렸다.
 #   평상시에는 두 단계 모두 정상 실행되고, 이례적으로 느릴 때만 발동한다.
-BUDGET_RETABLE = 22.0    # 표 재생성은 이 시각을 넘겼을 때만 포기
-BUDGET_REFIX = 30.0      # 검증 후 재작성은 이 시각을 넘겼을 때만 포기
+BUDGET_RETABLE = 40.0    # 표 재생성은 이 시각을 넘겼을 때만 포기
+BUDGET_REFIX = 50.0      # 검증 후 재작성은 이 시각을 넘겼을 때만 포기
 
 LABELS = ["제도", "세제", "상품설명", "추천", "무관"]
 
@@ -287,6 +440,16 @@ BASE_RULES = (
     "있으면 적용 시점이 더 최신인 기준을 우선해라.\n"
     "- 문서에 없는 내용은 '제공된 자료에서 확인할 수 없습니다'라고 답해.\n"
     "- 정확한 수치를 인용하고, 간결하고 이해하기 쉽게 설명해.\n"
+    # v9.64: 사실은 맞게 옮기고 '이유'만 지어내는 일이 있었다
+    # v9.69: 규정이 있는데 '불가능하다'고 뒤집어 답한 사례
+    "- 문서에 어떤 제도의 세부 운영 규정(이자·만기·신청 절차·반대매매·해지 방법 등)이 "
+    "실려 있으면, 그 제도가 '불가능하다'거나 '지원하지 않는다'고 말하지 마라. "
+    "규정이 실려 있다는 것은 그 제도가 운영된다는 뜻이다. "
+    "특정 조건에서 제한된다는 내용이 있으면 '그 조건에서 제한된다'고만 말하고, "
+    "제도 자체가 불가능하다고 넓히지 마라.\n"
+    "- 문서에 '왜 그런지'가 적혀 있지 않으면 이유를 만들어 붙이지 마라. "
+    "'~때문입니다', '~하기 위해서입니다' 같은 설명은 문서에 그 이유가 실제로 적혀 있을 때만 써라. "
+    "적혀 있지 않으면 사실만 전하고 멈춰라.\n"
     "- 문서에는 세법 개정 전·후 수치가 섞여 있을 수 있어. 연금저축 세액공제 한도는 "
     "연 600만원, IRP 합산 900만원이 최신 기준(2023년 이후)이야. 400만원(연금저축)과 "
     "700만원(연금계좌 합산)은 2022년 이전 구 기준이므로 현행 한도로 말하지 마. "
@@ -444,7 +607,9 @@ TYPE_CONFIG = {
 
 # 무관 질문은 LLM 호출 없이 고정 응답 (비용·지연 절약)
 OFF_TOPIC_ANSWER = (
-    "죄송하지만 저는 미래에셋증권의 연금·퇴직연금 전문 상담사입니다. "
+    "죄송합니다. 저는 미래에셋증권의 연금·퇴직연금 상담을 위해, "
+    "제공된 연금 관련 자료를 근거로만 답변하도록 만들어졌습니다. "
+    "문의하신 내용은 그 자료의 범위를 벗어나 확인해 드릴 수 없습니다. "
     "연금 제도, 퇴직금, 세제 혜택, 연금 상품에 대해 질문해 주시면 자세히 안내해 드릴게요."
 )
 
@@ -596,7 +761,9 @@ COMPARE_KEYWORDS = ["비교", "차이", "뭐가 나아", "뭐가 좋아", "어�
 COMPARE_SYSTEM = (
     "너는 미래에셋증권의 연금 전문 상담사야. 지금 질문은 여러 금융상품을 '비교'해달라는 질문이야.\n"
     + BASE_RULES + "\n"
-    "- 반드시 마크다운 표로 비교해. 첫 열은 비교 항목, 나머지 열은 각 상품.\n"
+    "- 답변은 반드시 마크다운 표를 포함해야 한다. 한두 문장 안내 뒤 곧바로 표를 써라. "
+    "표 없이 줄글로만 답하면 안 된다.\n"
+    "- 첫 열은 비교 항목, 나머지 열은 각 상품.\n"
     "- 비교 항목은 아래 순서대로 확인해서 채우고, **최소 5개 항목 이상** 비교해:\n"
     "  ① 투자 대상·전략 ② 주요 투자 비중 ③ 비교지수(벤치마크) ④ 위험등급 "
     "⑤ 수수료(보수) ⑥ 투자 기간·만기 ⑦ 세제 혜택 ⑧ 유의사항\n"
@@ -767,6 +934,44 @@ _FEE_NUM = re.compile(r"\d+\.\d+")
 
 
 _DEC = re.compile(r"\d+\.\d+")
+
+
+# ── v9.70: 필수 근거 보강 ────────────────────────────────────────────
+#   검색 순위에 맡기면 놓치는 청크가 있다(실측: '주식을 연금계좌로 옮길 수 있나'에
+#   doc34의 실물이전 불가사유 코드표가 상위 5에 못 들었다).
+#   보수표를 직접 끌어오는 v9.20과 같은 방식으로, 확인된 짝만 좁게 넣는다.
+#   각 항목: (질문에 있어야 할 말들, 청크에 있어야 할 말들, 가져올 개수)
+MUST_CHUNKS = [
+    # v9.71: '금융사를 옮기는 맥락'일 때만. 일반 주식계좌→연금계좌 입고는 다른 얘기다.
+    (("주식", "종목", "지분증권", "펀드"), ("실물이전", "현물이전", "타사", "이관", "다른 금융"),
+     ("실물이전 불가사유", "지분증권/리츠"), 2),
+    (("담보", "대출", "융자"), ("연금저축", "연금계좌"),
+     ("연금저축계좌 반대매매", "증권담보융자"), 2),
+]
+
+
+def find_must_chunks(question, exclude, limit_total=2):
+    """질문이 특정 주제면 필요한 청크를 코퍼스에서 직접 찾아온다."""
+    seen = {c["text"] for c in exclude}
+    out = []
+    for q_any, q_any2, need, lim in MUST_CHUNKS:
+        if not any(k in question for k in q_any):
+            continue
+        if q_any2 and not any(k in question for k in q_any2):
+            continue
+        got = 0
+        for c in chunks:
+            if c["text"] in seen or any(c["text"] == o["text"] for o in out):
+                continue
+            if any(k in c["text"] for k in need):
+                out.append(c)
+                got += 1
+                if got >= lim:
+                    break
+        if out:
+            break
+    return out[:limit_total]
+
 
 
 def find_fee_rows(sources, exclude, limit=2):
@@ -1114,10 +1319,18 @@ def ensure_compare_rows(ans):
     if not missing:
         return ans, 0
     lines[end + 1:end + 1] = ["| " + n + " |" + " 자료 없음 |" * (ncol - 1) for n in missing]
-    out = "\n".join(lines)
-    if _CMP_FOOT not in out:
-        out = out.rstrip() + "\n\n" + _CMP_FOOT
-    return out, len(missing)
+    return "\n".join(lines), len(missing)
+
+
+def ensure_noinfo_footnote(ans):
+    """v9.59: 표에 '자료 없음' 칸이 있으면 그 뜻을 밝히는 각주를 붙인다.
+    v9.41에서는 '코드가 행을 추가했을 때'에만 붙여, 모델이 스스로 자료 없음을
+    쓴 경우 각주가 빠졌다(R44). 판정 기준은 '누가 썼는가'가 아니라
+    '표에 자료 없음이 있는가'여야 한다."""
+    has = any(ln.count("|") >= 2 and "자료 없음" in ln for ln in ans.splitlines())
+    if not has or _CMP_FOOT in ans:
+        return ans, 0
+    return ans.rstrip() + "\n\n" + _CMP_FOOT, 1
 
 
 
@@ -1144,6 +1357,9 @@ _GRADE_TRAP = ("변경전", "변경후", "변경사유", "변경 사유", "분�
                "분류체계", "개편", "산정기준", "의미 유의사항")
 # v9.46: 답변에 붙는 표식. 코드가 소유하고 테스트는 이 값을 읽어간다.
 RISK_CARD_MARK = "[위험등급 정리"
+# v9.74: '원문에서 확인한 등급 정리'와 '원문과 대조하지 못했다는 경고'는
+#   전혀 다른 사실이다. 같은 표식을 쓰면 한쪽을 막는 규칙이 다른 쪽까지 막는다.
+RISK_WARN_MARK = "[위험등급 원문 대조"
 _LABEL_BY_GRADE = {1: "매우 높은 위험", 2: "높은 위험", 3: "다소 높은 위험",
                    4: "보통 위험", 5: "낮은 위험", 6: "매우 낮은 위험"}
 # 변동성은 척도가 문서마다 다르다 → 값과 '척도 이름'을 함께 들고 다닌다
@@ -1227,6 +1443,52 @@ def _cells(line):
     """마크다운 표의 한 줄을 칸 목록으로 (강조 기호 제거)"""
     c = [x.strip() for x in line.strip().strip("|").split("|")]
     return [re.sub(r"[*_`]", "", x).strip() for x in c]
+
+
+# ── v9.63: OCR 품질 ─────────────────────────────────────────────────
+#   스캔 PDF에서 뽑힌 청크는 문장이 끊기고 글자가 깨져 있다. 그런 근거를 그대로
+#   주면 모델이 조각을 이어 붙여 없는 사실을 만든다(실측: 예약주문 시간 → 미수 방지).
+#   정상 한국어 문장에서는 거의 나오지 않는 신호만 센다.
+_ODD_CHAR = re.compile(r"[『』〔〕｢｣＠＃＄％＆￥∙◇◆■□▲▼¨′″]")
+_JAMO = re.compile(r"[ㄱ-ㅎㅏ-ㅣ]")
+_NUMRUN = re.compile(r"(?:(?<=\s)|^)\d{3,}(?:\s+\d{3,}){2,}")
+_ASCII_JUNK = re.compile(r"[a-zA-Z]\d{4,}|\d{4,}[a-zA-Z]")
+_OK1 = set("연년월일시분초총약각및등내외전후중상하대소만원수개건차명색점"
+           "그이저것수때곳말일법식형기수액율률비용상한액표주식채권형"
+           "제첫두별낸못더")   # v9.77: 법조문의 '제 N조', '첫/두 번째' 등
+_LONE1 = re.compile(r"(?<!\S)([가-힣])(?!\S)")
+GARBLE_WARN = 0.30          # 이 점수 이상이면 '깨진 근거'로 본다 (생성 주의 카드용)
+# v9.66: 기한 블록은 문장이 사용자에게 그대로 나가므로 더 엄격하게 본다.
+#   실측 #5는 0.25였는데 "11103@56「08.01.1", "ㅁ0-5일까지는"이 그대로 노출됐다.
+GARBLE_STRICT = 0.15
+
+
+def garble_score(t):
+    """0(깨끗)~1(심하게 깨짐)."""
+    n = max(len(t), 1)
+    w = max(len(t.split()), 1)
+    lone_bad = sum(1 for c in _LONE1.findall(t) if c not in _OK1)
+    s = 0.0
+    s += min(len(_ODD_CHAR.findall(t)) / n * 60, 0.30)
+    s += min(len(_JAMO.findall(t)) / n * 80, 0.25)
+    # v9.75: 한 글자 단어('낸','별','두','수')는 정상 한국어에 흔하다. 한두 개로는
+    #   깨졌다고 볼 수 없다 — 깨진 원문은 홑글자가 무더기로 나온다. 3개째부터 센다.
+    s += min(max(lone_bad - 2, 0) / w * 3.0, 0.25)
+    s += min(len(_NUMRUN.findall(t)) * 0.12, 0.24)
+    s += min(len(_ASCII_JUNK.findall(t)) * 0.04, 0.12)
+    return round(min(s, 1.0), 3)
+
+
+OCR_CARD = (
+    "[원문 인식 주의 — 아래 참고 문서 중 일부는 스캔 문서에서 자동 추출되어 "
+    "문장이 끊기거나 글자가 깨져 있다]\n"
+    "- 끊긴 조각을 이어 붙여 인과관계를 만들지 마라. 예: 어떤 시간대가 적혀 있다고 해서 "
+    "'그 시간에 하면 ~가 된다'고 결론짓지 마라.\n"
+    "- 깨진 부분에서 의미를 추측하지 마라. 다만 **온전히 읽히는 문장이 하나라도 있으면 "
+    "그 내용은 반드시 답변에 활용해라.** 글자가 깨진 곳이 섞여 있다는 이유로 답변을 "
+    "포기하지 마라 — 읽히는 만큼은 답하고, 확인되지 않는 부분만 따로 밝혀라."
+)
+
 
 
 def _src_text(source):
@@ -1327,15 +1589,130 @@ def risk_truth_card(prof):
     return "\n".join(card)
 
 
-def enforce_risk_row(ans, prof):
-    """비교표의 위험등급 칸을 원문 값으로 다시 쓴다.
-    → (답변, 교정 칸수, 표에서 칸을 맞춘 상품명 집합)"""
-    if not prof:
-        return ans, 0, set()
+# ── v9.72: 표의 열 이름 ↔ 문서의 상품명 잇기 ────────────────────────
+#   모델이 만든 표 헤더는 문서의 정식 명칭과 다르다(띄어쓰기·축약·법적형태 생략).
+#   실측 R44: 표 '미래에셋 코어밸류 연금저축증권전환형'
+#             문서 '미래에셋코어밸류연금저축증권전환형자투자신탁1호(주식)'
+#   → 양쪽을 같은 규칙(_GENERIC 제거 = 운용사·법적형태·괄호·공백 삭제)으로
+#     정규화한 뒤 포함 관계를 본다. 후보가 둘 이상이면 찍지 않고 포기한다.
+def _match_col(h, prof):
+    """표 열 이름 h가 가리키는 상품 → (상품명, 정보) 또는 (None, None)"""
+    hk = _GENERIC.sub("", h or "")
+    if len(hk) < 3:
+        return None, None
+    cand = []
+    for name, r in prof.items():
+        nk = _GENERIC.sub("", name)
+        if len(nk) < 3:
+            continue
+        if nk == hk:
+            return name, r
+        if nk in hk or hk in nk:
+            cand.append((name, r))
+    if len(cand) == 1:
+        return cand[0]
+    if cand:
+        return None, None          # 어느 쪽인지 모호하면 손대지 않는다
+    # 복합어라 부분 문자열로 안 걸릴 때 — 검색과 같은 바이그램 겹침.
+    #   단, 같은 계열 상품은 '연금저축증권' 같은 조각을 공유한다. 겹친 개수만
+    #   보면 '고배당포커스' 열이 '코어밸류' 상품에 붙는다(실측). 그래서
+    #   그 상품 이름의 몇 할이 겹쳤는지(비율)를 함께 본다.
+    ht = {g for g in _tok(h) if len(g) == 2}
+    best, second, hit = 0.0, 0.0, (None, None)
+    for name, r in prof.items():
+        g = {x for x in _tok(_key_name(name)) if len(x) == 2}
+        if len(g) < 3:
+            continue
+        ov = len(g & ht)
+        sc = ov / len(g) if ov >= 3 else 0.0
+        if sc > best:
+            best, second, hit = sc, best, (name, r)
+        elif sc > second:
+            second = sc
+    if best >= 0.6 and best > second:
+        return hit
+    return None, None
+
+
+# ── v9.77: 표 행 정렬 ────────────────────────────────────────────────
+#   실측 5건: 생성 중 줄바꿈이 사라져 여러 행이 한 줄에 붙고 마지막 '|'가 떨어졌다.
+#   "| 주요 투자 비중 | 주식 70% | 채권 95% | 비교지수 | 어려움 | KOBI 120 x 100"
+#   표가 깨지면 화면 전체가 깨져 보인다 — 머리글 칸수를 기준으로 코드가 다시 편다.
+def fix_table_rows(ans):
+    """머리글 칸수(H) 기준: 칸이 넘치면 H개씩 잘라 여러 행으로, 모자라면
+    '자료 없음'으로 채운다. → (답변, 고친 행수)"""
     lines = ans.splitlines()
     idx = [i for i, ln in enumerate(lines) if ln.count("|") >= 2]
-    if len(idx) < 3:
-        return ans, 0, set()
+    if len(idx) < 2:
+        return ans, 0
+    head_i = idx[0]
+    H = len(_cells(lines[head_i]))
+    if H < 2:
+        return ans, 0
+    n, out = 0, []
+
+    def _row(cs):
+        return "| " + " | ".join(cs) + " |"
+
+    for i, ln in enumerate(lines):
+        if ln.count("|") < 2:
+            out.append(ln)
+            continue
+        # v9.79: 모든 표 줄을 규격으로 다시 쓴다. 칸 수가 맞아도 끝 '|'가 빠진
+        #   행이 있었다(실측 R27·R45) — 조건부로 고치면 반드시 새는 곳이 생긴다.
+        if re.fullmatch(r"[\s|:\-–—]+", ln):        # 구분선
+            if len(_cells(ln)) != H:
+                n += 1
+            out.append(_row(["---"] * H))
+            continue
+        cells = _cells(ln)
+        if i == head_i or len(cells) == H:
+            out.append(_row(cells))
+            continue
+        n += 1
+        if len(cells) > H:                           # 붙은 행 → H개씩 편다
+            for j in range(0, len(cells), H):
+                chunk = cells[j:j + H]
+                chunk += [_NOINFO_CELL] * (H - len(chunk))
+                out.append(_row(chunk))
+        else:                                        # 모자란 행 → 자료 없음으로
+            cells += [_NOINFO_CELL] * (H - len(cells))
+            out.append(_row(cells))
+    return "\n".join(out), n
+
+
+# ── v9.74: 연금수령 요건 ────────────────────────────────────────────
+#   문서(doc39) 기준 요건은 셋이다: 가입기간 5년 이상 / 만 55세 이후 인출 /
+#   연간 연금수령한도 이내. 프롬프트로만 못박았더니 회차마다 '55세'가 빠졌다
+#   (실측 R25, 1/2회 실패). 문서에 확정적으로 적힌 것은 코드가 붙인다.
+#   조건은 '질문'에만 건다 — 답변에 걸면 그 조건 자체가 확률적이 된다(v9.56).
+PENSION_REQ_MARK = "[연금수령 요건"
+_REQ_TOPIC = re.compile(r"연금\s*으?로\s*받|연금\s*수령|연금\s*개시|수령\s*요건|"
+                        r"연금\s*으?로\s*전환|연금\s*으?로\s*나눠")
+_REQ_ASK = re.compile(r"5\s*년|요건|조건|언제|가능|받을\s*수\s*있|되나|될까|자격")
+
+
+def pension_req_card(question):
+    """연금수령 요건을 묻는 질문이면 문서 기준 요건 세 가지를 코드가 붙인다."""
+    if not (_REQ_TOPIC.search(question) and _REQ_ASK.search(question)):
+        return None
+    return (PENSION_REQ_MARK + " — 문서 기준] 연금으로 수령하려면 "
+            "① 연금계좌 가입기간 5년 이상, ② 만 55세 이후 인출, "
+            "③ 연간 연금수령한도 이내 인출 — 세 가지를 모두 충족해야 합니다. "
+            "여기서 '5년'은 가입기간을 뜻하며, 5년에 걸쳐 나눠 받는다는 의미가 아닙니다. "
+            "다만 계좌에 퇴직급여(퇴직금)가 들어 있는 경우에는 "
+            "가입기간 5년 요건이 적용되지 않습니다.")
+
+
+def enforce_risk_row(ans, prof):
+    """비교표의 위험등급 칸을 원문 값으로 다시 쓴다.
+    → (답변, 교정 칸수, 칸을 맞춘 상품명 집합, 대조 못 한 등급 칸수)"""
+    if not prof:
+        return ans, 0, set(), 0
+    lines = ans.splitlines()
+    idx = [i for i, ln in enumerate(lines) if ln.count("|") >= 2]
+    if len(idx) < 2:
+        return ans, 0, set(), 0
     header = _cells(lines[idx[0]])
     row_i = None
     for i in idx[1:]:
@@ -1344,18 +1721,18 @@ def enforce_risk_row(ans, prof):
             row_i = i
             break
     if row_i is None:
-        return ans, 0, set()
+        return ans, 0, set(), 0
     cur = _cells(lines[row_i])
     if len(cur) != len(header):
-        return ans, 0, set()
-    fixed, n, matched = [cur[0]], 0, set()
+        return ans, 0, set(), 0
+    fixed, n, matched, unver = [cur[0]], 0, set(), 0
     for h, val in zip(header[1:], cur[1:]):
-        hit = hit_name = None
-        for name, r in prof.items():
-            if name in h or (r["short"] and r["short"] in h):
-                hit, hit_name = r, name
-                break
+        hit_name, hit = _match_col(h, prof)
         if not hit:
+            # v9.72: 등급을 말하고 있는데 원문에서 그 상품을 못 찾은 칸은 세어 둔다.
+            #   침묵하면 대조된 값처럼 보인다.
+            if re.search(r"[1-6]\s*등급", val):
+                unver += 1
             fixed.append(val)
             continue
         matched.add(hit_name)
@@ -1365,29 +1742,54 @@ def enforce_risk_row(ans, prof):
         fixed.append(want)
     if n:
         lines[row_i] = "| " + " | ".join(fixed) + " |"
-    return "\n".join(lines), n, matched
+    return "\n".join(lines), n, matched, unver
 
 
-def fix_risk_claims(ans, prof, matched=None, text_scope=""):
-    """원문 등급과 어긋나는 문장을 지우고, 원문 기준 정리를 붙인다. → (답변, 삭제수)"""
+def _claimed_grades(ans):
+    """v9.72: 비교표의 위험등급 행이 등급을 몇 개나 '주장'하고 있는가.
+    카드를 붙일지 말지는 여기서 정한다 — 표가 등급을 말하면 그 등급의 출처를
+    밝히는 것은 조건이 아니라 의무다."""
+    for ln in ans.splitlines():
+        if ln.count("|") >= 2 and ("위험등급" in ln or "위험 등급" in ln
+                                   or "위험도" in ln):
+            return len(re.findall(r"[1-6]\s*등급", ln))
+    return 0
+
+
+def fix_risk_claims(ans, prof, matched=None, text_scope="", unverified=0):
+    """원문 등급과 어긋나는 문장을 지우고, 원문 기준 정리를 붙인다.
+    → (답변, 삭제수, 추적문구)"""
     # v9.49: 답변이 다루지 않는 상품의 등급을 덧붙이면 오히려 근거를 흐린다.
     #   (실측 H3: TDF2045를 물었는데 검색에 걸린 다른 상품의 등급이 붙었다)
+    # v9.61: 위험등급 정리는 '상품을 비교한 답변'에 붙는 것이다.
+    #   표가 없으면 그 답변은 상품을 비교하지 않았다는 뜻이므로 붙이지 않는다.
+    claimed = _claimed_grades(ans)
+    if claimed < 2 and sum(1 for ln in ans.splitlines() if ln.count("|") >= 2) < 3:
+        return ans, 0, ""
     matched = matched or set()
-    text_scope = (text_scope or "") + " " + ans
-    # v9.51: 글자 일치는 한국어 복합어에서 실패한다
-    #   (질문 '솔로몬 국공채 단기' vs 문서명 '미래에셋솔로몬단기국공채…')
-    #   → 검색에 쓰는 바이그램으로 겹침 수를 센다.
-    _t = {g for g in _tok(text_scope) if len(g) == 2}
-
-    def _rel(name, short):
-        if name in matched or name in ans or (short and short in ans):
-            return True
-        g = {x for x in _tok(_key_name(name)) if len(x) == 2}
-        return len(g & _t) >= 3
-
-    prof = {n: r for n, r in prof.items() if _rel(n, r.get("short"))}
+    # v9.78: 어느 상품의 카드를 붙일지는 추측하지 않는다. 표의 열과 실제로
+    #   이어진 상품(matched)만 쓴다 — 바이그램 추측은 TDF2045 질문에 이웃 TDF
+    #   상품을 끌어와 '답변이 다루지 않는 상품의 등급'을 붙였다(실측 R50 재발).
+    prof = {n: r for n, r in prof.items() if n in matched}
+    # v9.72: 표는 등급을 2개 이상 말하는데 원문에서 확인한 상품이 2개가 안 된다.
+    #   그대로 두면 확인하지 못한 등급이 대조된 값처럼 보인다 — 밝히고 끝낸다.
     if len(prof) < 2:
-        return ans, 0
+        if claimed < 2:
+            return ans, 0, ""
+        card = RISK_WARN_MARK + " 불가]"
+        if len(prof) == 1:
+            _n, _r = next(iter(prof.items()))
+            card += (f" '{_r['short']}'의 현재 위험등급은 {_r['grade']}등급"
+                     + (f"[{_r['label']}]" if _r["label"] else "") + "입니다.")
+            card += (" 표에 적힌 나머지 등급은 해당 상품의 투자설명서를 찾지 못해"
+                     " 원문과 대조하지 못했습니다.")
+        else:
+            card += (" 표에 적힌 위험등급은 투자설명서 원문과 대조하지 못했습니다"
+                     " (해당 상품의 투자설명서를 찾지 못했습니다).")
+        card += " 가입 전 각 상품의 투자설명서에서 위험등급을 직접 확인하시기 바랍니다."
+        if RISK_WARN_MARK not in ans and RISK_CARD_MARK not in ans:
+            ans = ans.rstrip() + "\n\n" + card
+        return ans, 0, f" 위험등급 대조 불가 고지(확인 {len(prof)}개/표 {claimed}개)"
     good = {r["grade"] for r in prof.values()}
     good_labels = {r["label"] for r in prof.values() if r["label"]}
     same = len(good) == 1
@@ -1441,9 +1843,13 @@ def fix_risk_claims(ans, prof, matched=None, text_scope=""):
                  + " / ".join(f"{n} {v}%" for n, v in vols)
                  + f"으로, 표기상 가장 낮은 것은 '{vols[0][0]}'입니다.")
     card += " (문서의 '위험등급 변경' 이력에 적힌 과거 등급은 현재 등급이 아닙니다.)"
+    # v9.72: 표에 등급이 적혔는데 그 상품을 원문에서 못 찾은 열이 있으면 밝힌다.
+    if unverified:
+        card += (f" 다만 표의 {unverified}개 항목은 해당 상품의 투자설명서를 찾지 못해"
+                 " 원문과 대조하지 못했으니 가입 전 직접 확인하시기 바랍니다.")
     if RISK_CARD_MARK not in ans:
         ans = ans.rstrip() + "\n\n" + card
-    return ans, dropped
+    return ans, dropped, f" 위험등급 정리(원문 {len(prof)}개 상품)"
 
 
 # ── v9.48: 문서에 없는 것을 '추측'으로 채우지 않는다 ──────────────────────
@@ -1451,10 +1857,13 @@ def fix_risk_claims(ans, prof, matched=None, text_scope=""):
 #         "명시되지 않았으나 일반적으로 동일하게 적용될 가능성 있음" 이 들어갔다.
 #   '자료에 없다'고 스스로 말하면서 그 자리를 추측으로 메우는 것은 근거 기반 위반이다.
 #   → 두 신호가 한 칸(또는 한 문장)에 같이 있으면 '자료 없음'으로 되돌린다.
-_NOSTATE = re.compile(r"(?:명시|기재|제시|언급|확인)\s*되?\s*(?:지|가|이)?\s*"
+_NOSTATE = re.compile(r"(?:명시|기재|제시|언급|확인|제공|설명|나와)\s*되?\s*(?:지|가|이)?\s*"
                       r"(?:않|아니|못하)[가-힣]*\s*(?:으나|지만|나|고)")
 _GUESS = ("예상", "추정", "가능성", "보입니다", "보임", "것으로 판단", "일 것", "듯",
           "일반적으로", "통상")
+# v9.59: 표 칸에서는 이 표현만 있어도 근거 없는 추측이다 (신호어 불필요)
+_GUESS_STRICT = ("예상", "추정", "가능성", "보입니다", "보임", "것으로 판단", "일 것",
+                 "일반적으로", "통상", "듯")
 _NOINFO_CELL = "자료 없음"
 
 
@@ -1466,7 +1875,11 @@ def strip_speculation(ans):
         if line.count("|") >= 2:                      # 표: 해당 칸만 '자료 없음'으로
             cells = line.split("|")
             for i, c in enumerate(cells):
-                if _NOSTATE.search(c) and any(g in c for g in _GUESS):
+                # v9.59: 표 칸에는 문서에서 읽은 사실만 들어가야 한다.
+                #   신호어('명시되지 않았으나') 없이 추측어만 있어도 근거가 없다.
+                if _NOSTATE.search(c) or any(g in c for g in _GUESS_STRICT):
+                    if _NOSTATE.search(c) and not any(g in c for g in _GUESS):
+                        continue          # 단순한 '자료 없음' 서술은 그대로 둔다
                     cells[i] = f" {_NOINFO_CELL} "
                     n += 1
             out.append("|".join(cells))
@@ -1481,6 +1894,43 @@ def strip_speculation(ans):
     if not n:
         return ans, 0
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)), n
+
+
+# ── v9.64: 지어낸 '이유' 제거 ────────────────────────────────────────
+#   실측: 문서에는 "변경 불가하며 오류메시지가 나옵니다"뿐인데 답변은
+#   "…아닌 것으로 간주되기 때문입니다"라고 이유를 붙였다. 사실은 맞아서
+#   근거 검증을 통과한다. 모델이 스스로 추론했음을 드러내는 동사만 좁게 잡는다.
+_INFER_REASON = re.compile(
+    r"[^.!?\n]*(?:간주|판단|해석|추정|이해|여겨)\s*(?:되|하)[가-힣]*\s*"
+    r"(?:때문|이유)[^.!?\n]*[.!?]?")
+# v9.65: '이는 곧 ~를 시사합니다' — 문서에 없는 결론을 끌어내는 표현.
+#   실측: 문서는 '융자잔고가 있는 계좌는 이관 불가'라고만 했는데
+#   거기서 '담보대출이 불가하다'를 도출했다.
+_INFER_CONCL = re.compile(r"[^.!?\n]*(?:시사|유추|추론)[가-힣]*[^.!?\n]*[.!?]?")
+
+
+def strip_invented_reason(ans):
+    """'~로 간주되기 때문입니다' 처럼 모델이 추론해 붙인 이유를 지운다."""
+    out, n = [], 0
+    for line in ans.splitlines():
+        if line.count("|") >= 2:          # 표는 건드리지 않는다
+            out.append(line)
+            continue
+        new, c = _INFER_REASON.subn("", line)
+        new, c2 = _INFER_CONCL.subn("", new)
+        c += c2
+        if c:
+            n += c
+            new = re.sub(r"\s*,\s*(?=[.!?]|$)", "", new)
+            new = re.sub(r"\s{2,}", " ", new).strip()
+            # 문장이 통째로 사라졌으면 그 줄은 버린다
+            if not re.search(r"[가-힣]", new):
+                continue
+        out.append(new)
+    if not n:
+        return ans, 0
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)), n
+
 
 
 # ── v9.42: 일부만 확인된 항목을 '모든 상품이 ~'로 일반화하면 주의를 붙인다 ──────
@@ -1605,7 +2055,9 @@ def calc_tax_credit_bands(paid, limit=900, limit_label="연금저축+IRP 합산"
         f"{int(base):,}만원 \u00d7 16.5% = 약 {base * 0.165:,.1f}만원",
         f"- 총급여 5,500만원 초과: "
         f"{int(base):,}만원 \u00d7 13.2% = 약 {base * 0.132:,.1f}만원",
-        "- 두 세율은 소득에 따라 '둘 중 하나'만 적용된다. 절대 더하지 말 것.",
+        "- 위 두 값은 '소득 구간에 따라 달라지는 두 경우'다. 더하지 말고, 소득을 "
+        "모르는 상태에서 한쪽 값만 골라 확정하지도 마라. 두 경우를 모두 제시하라.",
+        "- 한도와 공제율은 사람마다 개별 적용된다. 여러 사람의 소득을 하나로 묶지 마라.",
     ]
     if paid > LIMIT:
         lines.append(f"- 참고: 한도(900만원)를 초과한 {int(paid - LIMIT):,}만원은 세액공제 대상이 아님")
@@ -1750,19 +2202,25 @@ def post_with_retry(url, payload, timeout=45, tries=3):
     """API 호출 공통 함수: 실패하면 쉬었다 재시도.
     v7.5: 속도 제한(429)은 더 길게 기다리며 재시도 (연속 질문 심사 대비)
     v9.27: 5회x60초는 최악의 경우 수 분이 걸려 무응답 위험이 커서 3회x45초로 줄였다."""
+    # v9.65: 429로 최종 실패하면 그 질문은 답변 자체가 없다(실측: 심사에서 0점).
+    #   429일 때만 시도를 늘린다. 다른 오류까지 늘리면 무응답 시간이 길어진다.
     last_err = None
-    for i in range(tries):
+    i, n429, limit = 0, 0, tries
+    while i < limit:
         wait = 1.5 * (i + 1)
         try:
             r = requests.post(url, headers=HEADERS, json=payload, timeout=timeout)
             if r.status_code == 200:
                 return r
             last_err = Exception(f"HTTP {r.status_code}")
-            if r.status_code == 429:  # 속도 제한: 충분히 길게 대기
-                wait = 6.0 * (i + 1)  # 6초 → 12초 → 18초 → 24초
+            if r.status_code == 429:          # 속도 제한
+                n429 += 1
+                wait = (4.0, 8.0, 14.0, 14.0)[min(n429 - 1, 3)]
+                limit = max(limit, 4)          # 최대 4회까지 끈질기게
         except Exception as e:
             last_err = e
         time.sleep(wait)
+        i += 1
     raise last_err
 
 
@@ -1829,6 +2287,39 @@ def filter_by_relevance(docs, scores, min_keep=REL_MIN_KEEP):
             [round(scores[i], 3) for i in drop])
 
 
+# ── v9.67: 용어 확장 ────────────────────────────────────────────────
+#   상담 질문은 고객의 말로 오고, 문서는 업무 용어로 쓰여 있다. 둘이 다르면
+#   키워드 검색이 끊긴다. 확인된 짝만 좁게 넣는다(추측으로 넓히면 엉뚱한 문서가 온다).
+QUERY_SYNONYMS = [
+    (("예수금", "예탁금", "투자하지 않은 현금", "안 굴리는 현금", "남은 현금"),
+     ["현금성자산", "대기성자금", "대기자금"]),
+    (("보험사", "은행에 있는", "타사에 있는", "가져올", "가져오", "옮겨올"),
+     ["계약이전", "실물이전", "타사 이관", "수관"]),
+    (("옮기", "이체하", "넘기"), ["이전", "이관", "실물이전"]),
+    # v9.71: '주식→지분증권' 확장은 뺐다. doc34는 '계좌를 다른 금융사로 옮길 때'의
+    #   실물이전 이야기라, 일반 주식계좌→연금계좌 질문에는 맞지 않는 근거를 끌어왔다.
+    (("자동 매수", "자동매수", "정기 매수", "매달 사"), ["자동매수", "적립식", "옵트인"]),
+    (("합쳐서", "통합해서", "한꺼번에"), ["합산", "일괄"]),
+    (("문자", "알림", "카톡"), ["알림톡", "SMS", "안내 발송"]),
+    (("담보대출", "대출"), ["증권담보융자", "융자"]),
+    (("수수료 싼", "저렴한"), ["보수", "총보수", "수수료율"]),
+    (("깨면", "깨는", "중간에 빼"), ["중도해지", "중도인출"]),
+]
+
+
+def expand_query(question):
+    """질문에 고객 표현이 있으면 문서 표현을 덧붙인다. → (확장된 검색어, 붙인 말)"""
+    added = []
+    for keys, docs in QUERY_SYNONYMS:
+        if any(k in question for k in keys):
+            for d in docs:
+                if d not in question and d not in added:
+                    added.append(d)
+    if not added:
+        return question, []
+    return question + " " + " ".join(added), added
+
+
 def search(question, top_k=5):
     """하이브리드 검색: 임베딩(의미) + BM25(키워드) 순위 결합(RRF).
     반환: (문서 목록, 각 문서의 임베딩 유사도, 임계값 판정용 최고 임베딩 유사도)"""
@@ -1839,7 +2330,9 @@ def search(question, top_k=5):
     top_score = float(emb_scores.max())  # 무관 판정은 기존처럼 임베딩 기준 유지
 
     if HYBRID:
-        kw_scores = bm25_scores(question)
+        # v9.67: 키워드 검색에만 용어를 확장한다. 임베딩(의미)은 원 질문 그대로.
+        kw_query, _added = expand_query(question)
+        kw_scores = bm25_scores(kw_query)
         # 점수 정규화 결합: 임베딩(의미) 0.6 + 키워드(정확 용어) 0.4
         def _norm(x):
             span = x.max() - x.min()
@@ -1851,11 +2344,11 @@ def search(question, top_k=5):
 
     docs = [chunks[idx_list[i]] for i in order]
     doc_scores = [float(emb_scores[i]) for i in order]
-    return docs, doc_scores, top_score
+    return docs, doc_scores, top_score, (_added if HYBRID else [])
 
 
 @app.get("/answer")
-def answer(question_id: str, question: str):
+def answer(question_id: str, question: str, _retried: bool = False):
     t_start = time.time()          # v9.27: 응답 시간 예산 기준점
     try:
         # [0단계] 멀티턴: 후속 질문이면 직전 대화를 검색·이해에 반영
@@ -1868,7 +2361,8 @@ def answer(question_id: str, question: str):
             mt_note = "0) 멀티턴 맥락 감지: 직전 대화 반영 "
 
         # [1단계] 검색: 최대 5개를 미리 검색해두고, 유형에 따라 사용 개수 결정
-        found, scores, top_score = search(q_search, top_k=5)
+        found, scores, top_score, _expanded = search(q_search, top_k=5)
+        _exp_note = (f" → 용어 확장({'·'.join(_expanded[:4])})" if _expanded else "")
 
         # [2단계] 임계값 필터: 확실한 무관은 LLM 호출 없이 즉시 응답
         if top_score < THRESHOLD:
@@ -1951,6 +2445,15 @@ def answer(question_id: str, question: str):
             action_note += (f" → 근거 필터(기준 {_thr:.3f}): {_n_before}개 모두 "
                             f"관련도 충족")
 
+        # [4-a-000] v9.70: 검색이 놓치는 필수 근거를 코드가 직접 찾아 넣는다
+        _must = find_must_chunks(question, used)
+        if _must:
+            used = used + _must
+            context = "\n\n".join(f"[문서{i+1}] (출처: {c['source']})\n{c['text']}"
+                                   for i, c in enumerate(used))
+            action_note += (" → 필수 근거 보강("
+                            + ", ".join(c["source"] for c in _must) + ")")
+
         # [4-a-00] v9.20: 수수료 질문이면 보수표 청크를 검색 결과에 강제로 보강한다
         if any(w in question for w in FEE_WORDS):
             srcs = []
@@ -1972,6 +2475,14 @@ def answer(question_id: str, question: str):
                     context = "\n\n".join(cards) + "\n\n" + context
                 action_note += (f" → 보수표 청크 보강({len(extra)}개"
                                 f"{', 구성표 카드 ' + str(len(cards)) + '개' if cards else ''})")
+
+        # [4-a-05] v9.63: 근거에 깨진 청크가 섞이면 '이어 붙이지 마라'를 못박는다
+        _garb = [(c["source"], garble_score(c["text"])) for c in used]
+        _bad_g = [x for x in _garb if x[1] >= GARBLE_WARN]
+        if _bad_g:
+            context = OCR_CARD + "\n\n" + context
+            action_note += (" → 원문 인식 주의 카드("
+                            + ", ".join(f"{s2} {g2}" for s2, g2 in _bad_g[:3]) + ")")
 
         # [4-a-04] v9.44: 위험등급을 그 문서의 전체 청크에서 읽어 카드로 못박는다 (이력 배제)
         _rsrc = []
@@ -2013,6 +2524,7 @@ def answer(question_id: str, question: str):
 
         # [4-a] 세제 → 계산기 실행: 질문에 연봉·납입액이 있으면 파이썬으로 직접 계산
         calc_vals = None
+        band_vals = None      # v9.55: 소득 미상 구간 계산 결과 (없으면 None)
         paid_only = None
         sup_flag = False    # v9.23: 최상급·순위 요구 여부
         forced_pairs = []   # v9.18: 반드시 답변에 들어가야 할 (기한, 근거 문장)
@@ -2114,7 +2626,7 @@ def answer(question_id: str, question: str):
                     extra_n = 3
                 else:
                     extra_n = 3
-                extra_found, _, _ = search(q_search + extra_kw, top_k=extra_n)
+                extra_found, _, _, _ = search(q_search + extra_kw, top_k=extra_n)
                 seen = {c["text"] for c in used}
                 added = [c for c in extra_found if c["text"] not in seen]
                 if added:
@@ -2139,7 +2651,7 @@ def answer(question_id: str, question: str):
                 for p in parts[:3]:
                     if added_multi >= 4:
                         break
-                    sub, _, _ = search(p, top_k=2)
+                    sub, _, _, _ = search(p, top_k=2)
                     for c in sub:
                         if c["text"] not in seen_txt and added_multi < 4:
                             used.append(c)
@@ -2196,6 +2708,15 @@ def answer(question_id: str, question: str):
                 sent = "…" + sent[max(0, m.start() - 90):m.end() + 90] + "…"
                 _hits = _real_deadlines(sent) or _hits
             sent = _clean_sent(sent)
+            # v9.66: 깨진 문장을 기한으로 보여주면 그대로 사용자에게 나간다
+            if sent and garble_score(sent) >= GARBLE_STRICT:
+                continue
+            # v9.66: 숫자표가 통째로 딸려 오면 구 기준 세율 등이 섞인다
+            if sent and len(re.findall(r"\d+\.\d+\s*%", sent)) >= 2:
+                continue
+            # v9.68: '|'나 '#'가 든 것은 표·머리글 조각이다. 문장으로 읽히지 않는다.
+            if sent and ("|" in sent or "#" in sent):
+                continue
             if sent and sent not in deadline_sents:
                 deadline_sents.append(sent)
                 deadlines.extend(_hits)
@@ -2315,20 +2836,28 @@ def answer(question_id: str, question: str):
                     "그 상품의 열에만 넣어라. 칸이 밀리면 안 된다. "
                     "열 이름은 문서에 적힌 실제 상품명·클래스명을 쓰고, '상품 A' 같은 임의 이름은 "
                     "쓰지 마라. 상품명을 확인할 수 없으면 표 대신 그 사실을 밝혀라.")
-                ans2 = chat(system, strict, max_tokens=900, temperature=0.15)
-                if ans2:
+                # v9.61: 첫 생성이 표를 0줄로 내는 일이 잦다. 예산 안에서 최대 2회 시도한다.
+                best, best_rows = ans, len(rows)
+                tries = 0
+                for _try in range(2):
+                    if (time.time() - t_start) > BUDGET_RETABLE:
+                        break
+                    tries += 1
+                    ans2 = chat(system, strict, max_tokens=900, temperature=0.15)
+                    if not ans2:
+                        continue
                     rows2 = [ln for ln in ans2.splitlines()
                              if ln.count("|") >= 2 and not re.fullmatch(r"[\s|:\-]+", ln)]
                     w2 = [ln.count("|") for ln in rows2]
-                    better = len(rows2) >= max(len(rows), 5) and (
-                        not w2 or max(w2) - min(w2) < 1)
-                    if better or len(rows2) > len(rows):
-                        ans = ans2
-                        retry_note = (f" → 표 보정({len(rows)}줄"
-                                      f"{'/열 어긋남' if ragged else ''}"
-                                      f"): 재생성({len(rows2)}줄)")
-                if not retry_note:
-                    retry_note = f" → 표 보정({len(rows)}줄): 재생성 시도"
+                    ok = len(rows2) >= 5 and (not w2 or max(w2) - min(w2) < 1)
+                    if len(rows2) > best_rows:
+                        best, best_rows = ans2, len(rows2)
+                    if ok:
+                        break
+                ans = best
+                retry_note = (f" → 표 보정({len(rows)}줄"
+                              f"{'/열 어긋남' if ragged else ''}): "
+                              f"재시도 {tries}회 → {best_rows}줄")
             action_note += retry_note
 
         # [5단계] 근거 검증 레이어: 답변을 문서와 대조해 근거 없는 내용 제거/수정
@@ -2362,20 +2891,46 @@ def answer(question_id: str, question: str):
 
         # [6.5단계] v9.1: 답변 속 '[문서N]' 내부 순번을 실제 파일명으로 치환
         # (프롬프트 지시만으로는 지켜지지 않아 코드로 확정 처리)
+        # v9.76: 인용 표식은 지운다. 파일명은 답변 말미 [참고 문서]가 책임진다.
         def _to_source(m):
-            idx = int(m.group(1)) - 1
-            if 0 <= idx < len(used):
-                return f"(출처: {used[idx]['source']})"
             return ""
         # '[문서2](doc27.pdf)' 처럼 뒤에 괄호가 붙은 형태를 먼저 통째로 치환
         ans = re.sub(r"\[\s*문서\s*(\d+)\s*\]\s*\([^)]*\)", _to_source, ans)
+        # v9.76: '[문서1, 문서2]' '[문서 1·3]' 처럼 여러 개를 묶은 형태 (실측 P0013)
+        ans = re.sub(r"\[\s*문서\s*\d+(?:\s*[,·/및~-]+\s*(?:문서\s*)?\d+)+\s*\]",
+                     "", ans)
         # '[문서2]' 단독 형태
         ans = re.sub(r"\[\s*문서\s*(\d+)\s*\]", _to_source, ans)
-        # 혹시 남은 중복 표기 정리: (출처: X)(X) → (출처: X)
-        ans = re.sub(r"\(출처:\s*([^)]+)\)\s*\(\s*\1\s*\)", r"(출처: \1)", ans)
+        # v9.62: 대괄호 없는 '문서1에 따르면' / '문서 2에서는' 도 같은 문제다.
+        #   (실측: "다만 문서1에 따르면 알림톡…" 이 그대로 나갔다)
+        def _to_source_bare(m):
+            idx = int(m.group(1)) - 1
+            if 0 <= idx < len(used):
+                return f"제공된 자료(출처: {used[idx]['source']})"
+            return "제공된 자료"
+        ans = re.sub(r"(?<!\[)문서\s*([1-9])(?=\s*(?:에|의|에서|에는|에도|를|은|는|이|가|와|과|,|\.))",
+                     _to_source_bare, ans)
+        # v9.76: 본문에 남은 '(출처: doc29.xlsx)'를 지운다. 사용자가 열 수 없는 이름이다.
+        #   (모델이 스스로 적은 것도, 코드가 예전에 넣던 것도 여기서 함께 정리된다)
+        ans = re.sub(r"\s*[(\[]\s*출처\s*[:：]\s*[^)\]\n]+[)\]]", "", ans)
+        ans = re.sub(r"[ \t]{2,}", " ", ans)
+        ans = re.sub(r"\s+([.,!?)])", r"\1", ans)
+        ans = re.sub(r"(?m)^[ \t]*[.,]\s*", "", ans)
+        # v9.62: 내부 파일명을 '거기서 확인하세요'라고 안내하면 안 된다.
+        #   사용자는 doc9.pdf를 열 수 없다. 출처는 말미 [참고 문서]로만 밝힌다.
+        ans = re.sub(r"\(?출처:\s*[^)\n]+\)?\s*(?:에서|에|를)\s*(?:직접\s*)?"
+                     r"(?:확인|참고|참조)(?:하실 수 있습니다|하시기 바랍니다|하세요|해 주세요)",
+                     "아래 참고 문서에서 확인하실 수 있습니다", ans)
 
         # [6.8단계] v9.18: 질문과 직접 관련된 기한이 답변에서 빠졌으면 문서 문장으로 보강
-        miss = [(n, t) for n, t in forced_pairs if n not in ans.replace(" ", "")]
+        # v9.66: 답변이 '자료에 없다'로 끝났는데 기한만 붙이면 모순이다
+        #   (실측 #9: 주식 현물이전 질문에 ISA 60일 기한이 붙었다)
+        # v9.68: 길이가 아니라 '첫 문장이 자료 없음인가'로 본다.
+        #   (실측 #5: "확인할 수 없습니다" 뒤에 설명이 붙어 120자를 넘겼다)
+        _head = re.split(r"(?<=[.!?])\s+", ans.strip(), 1)[0]
+        _no_answer = bool(_NOINFO.search(_head))
+        miss = [] if _no_answer else \
+            [(n, t) for n, t in forced_pairs if n not in ans.replace(" ", "")]
         if miss:
             lines = []
             for n, t in miss[:1]:   # v9.19: 노이즈를 줄이려 한 문장만 덧붙인다
@@ -2384,6 +2939,13 @@ def answer(question_id: str, question: str):
             ans = ans.rstrip() + "\n\n※ 참고 문서에 명시된 기한입니다. 놓치면 혜택을 받을 수 없습니다.\n" \
                   + "\n".join(lines)
             calc_note += f" (기한 코드 보강 {len(miss)}건)"
+
+        # [6.9단계] v9.74: 연금수령 요건은 문서에 확정된 사실이다 → 코드가 붙인다
+        _req = pension_req_card(question)
+        if _req and PENSION_REQ_MARK not in ans and not _NOINFO.search(
+                re.split(r"(?<=[.!?])\s+", ans.strip(), 1)[0]):
+            ans = ans.rstrip() + "\n\n" + _req
+            calc_note += " (연금수령 요건 코드 보강)"
 
         # [7단계] 출처 표기: 평가 기준 대응 — 사용한 문서의 출처를 답변 본문에 자동 명시
         srcs = []
@@ -2450,6 +3012,39 @@ def answer(question_id: str, question: str):
                     clean_note += " 단위 오표기 고지 보강"
                     break
 
+        # (1-4c) v9.55: 소득을 모르는데 금액을 하나로 확정하는 일이 반복된다(R31 변종).
+        #   구간 계산기가 돌았으면 두 경우를 조건 없이 코드가 붙인다.
+        if band_vals:
+            _b = band_vals["base"]
+            _line = (f"※ 소득 구간이 확인되지 않아 금액을 하나로 확정할 수 없습니다. "
+                     f"공제 대상 {int(_b):,}만원 기준으로 총급여 5,500만원 이하이면 "
+                     f"{_b * 0.165:,.1f}만원(16.5%), 5,500만원을 초과하면 "
+                     f"{_b * 0.132:,.1f}만원(13.2%)입니다.")
+            if "소득 구간이 확인되지 않아" not in ans:
+                ans = ans.rstrip() + "\n\n" + _line
+                clean_note += " 소득 미상 구간 고지"
+
+        # (1-4d) v9.56: 세액공제를 받지 않은 납입금(과세제외금액)에는 기타소득세가
+        #   붙지 않는다. 조건을 '답변'이 아니라 '질문'에 건다 — 답변은 매번 달라진다.
+        # v9.77: '나머지·초과·찾을'은 인출과 무관한 질문에도 흔하다(실측 P0095:
+        #   디폴트옵션 운용지시 질문에 세제 카드가 붙었다). 인출·해지 문맥어만 남기고,
+        #   운용지시·디폴트옵션 문맥이면 세제 얘기를 붙일 자리가 아니다.
+        _EXEMPT_ACT = ("인출", "해지", "깨", "빼", "출금", "환매", "중도", "돌려받")
+        _EXEMPT_HINT = ("나머지", "초과", "찾")     # 넓은 말 — 세금 문맥이 있을 때만
+        _EXEMPT_TAX = ("세액공제", "공제", "과세", "세금", "기타소득")
+        _OPER_Q = ("디폴트옵션", "사전지정", "운용지시", "자동매수", "자동적용",
+                   "포트폴리오", "옵트인")
+        _fire = (any(k in question for k in _EXEMPT_ACT)
+                 or (any(k in question for k in _EXEMPT_HINT)
+                     and any(k in question for k in _EXEMPT_TAX)))
+        if _fire and not any(k in question for k in _OPER_Q) \
+                and "받지 않은 납입금" not in ans and "과세제외" not in ans:
+            ans = ans.rstrip() + (
+                "\n\n※ 기타소득세 16.5%는 세액공제를 받은 납입금과 운용수익을 인출할 때 "
+                "적용됩니다. 세액공제를 받지 않은 납입금(과세제외금액)은 인출하더라도 "
+                "기타소득세가 부과되지 않습니다.")
+            clean_note += " 과세제외금액 예외 고지"
+
         # (1-5) v9.31: 되묻기·성향확인인데 답변에 질문이 없으면 코드가 질문을 넣는다.
         #   프롬프트에 맡기면 지시가 많을 때 질문이 통째로 빠진다(실측: R15/R35 2회 모두 실패).
         if ask_line and "?" not in ans:
@@ -2490,13 +3085,41 @@ def answer(question_id: str, question: str):
                 ans = re.sub(r"\n{3,}", "\n\n", ans).strip()
                 clean_note += f" 잘못된 제외 사유 삭제 {n_bad}건"
 
+        # (1-7c) v9.57: 답변 어디에 있든 PDF 쪽번호·머리글은 지운다.
+        #   (모델이 참고 문서를 그대로 옮겨 적는 경우까지 잡는다)
+        before_junk = ans
+        ans = re.sub(r"[-–—]?\s*\d+\s*/\s*\d+\s*Mirae\s+Asset\s+Securities\s*",
+                     " ", ans)
+        ans = re.sub(r"Mirae\s+Asset\s+Securities\s*", " ", ans)
+        ans = re.sub(r"(?m)^\s*[-–—]\s*\d+\s*[-–—]\s*$", "", ans)
+        ans = re.sub(r"[ \t]{2,}", " ", ans)
+        if ans != before_junk:
+            clean_note += " 문서 머리글 제거"
+
+        # (1-7d) v9.58: 답변이 '자료에 없다' 한 문장뿐인데 검색된 문서를 근거처럼
+        #   달면 "근거가 있다는 건가?"라는 오해를 만든다(실측: 핀테크 허브 질문).
+        _body = re.sub(r"\s+", " ", ans).strip()
+        if len(_body) <= 80 and _NOINFO.search(_body) and not re.search(r"\d", _body):
+            _note = ("※ 아래 문서는 검색 과정에서 함께 조회된 자료이며, "
+                     "질문에 해당하는 내용은 포함되어 있지 않았습니다.")
+            if _note not in ans:
+                ans = ans.rstrip() + "\n\n" + _note
+                clean_note += " 무근거 출처 고지"
+
         # (1-8) v9.36: LaTeX 수식이 그대로 노출되면 화면이 깨진다 ($$900만 \times 16.5\%$$)
         before_tex = ans
         ans = re.sub(r"\$\$?\s*(.*?)\s*\$\$?", r"\1", ans, flags=re.S)
         ans = ans.replace("\\times", "×").replace("\\%", "%").replace("\\,", " ")
         ans = re.sub(r"\\[a-zA-Z]+\{([^}]*)\}", r"\1", ans)   # \text{...} 등
+        # v9.60: 마크다운 이스케이프가 그대로 보이는 것 (1억 이상\~3억 미만)
+        ans = re.sub(r"\\([~*_\[\]()#+\-.!])", r"\1", ans)
         if ans != before_tex:
             clean_note += " 수식 표기 정리"
+
+        # (1-8b) v9.77: 붙어버린 표 행을 먼저 편다 — 뒤의 표 처리들이 온전한 표를 보게
+        ans, n_tbl = fix_table_rows(ans)
+        if n_tbl:
+            clean_note += f" 표 행 정렬 {n_tbl}건"
 
         # (1-9) v9.41: 비교표에 빠진 비교 항목을 코드가 '자료 없음'으로 채운다.
         #   재생성(4.9단계)은 '줄 수가 너무 적을 때'만 돌아서, 5~6줄짜리 '조금 부족한
@@ -2508,12 +3131,55 @@ def answer(question_id: str, question: str):
 
         # (1-9b) v9.43: 위험등급은 원문(risk_prof)을 기준으로 표·문장을 바로잡는다
         if system is COMPARE_SYSTEM and risk_prof:
-            ans, n_row, _matched = enforce_risk_row(ans, risk_prof)
-            ans, n_drop = fix_risk_claims(ans, risk_prof, _matched, question)
-            clean_note += f" 위험등급 정리(표 {n_row}칸 교정, 모순 {n_drop}건 삭제)"
+            ans, n_row, _matched, n_unver = enforce_risk_row(ans, risk_prof)
+            ans, n_drop, _rnote = fix_risk_claims(ans, risk_prof, _matched,
+                                                  question, n_unver)
+            # v9.72: 실제로 한 일만 적는다 (예전에는 아무 일도 안 해도 찍혔다)
+            if n_row:
+                clean_note += f" 위험등급 표 {n_row}칸 교정"
+            if n_drop:
+                clean_note += f" 위험등급 모순 {n_drop}건 삭제"
+            if n_unver:
+                clean_note += f" 원문 미대조 {n_unver}칸"
+            clean_note += _rnote
+        # v9.79: 사냥 실측 창작 두 가지 — 문서에 없으면 지운다
+        ans = re.sub(r"금융소비자보호법\s*\(\s*FINRA\s*\)", "금융소비자보호법", ans)
+        _cal = re.compile(r"[^.!?\n]*(?:캘린더|달력)\s*기준[^.!?\n]*[.!?]?"
+                          r"|[^.!?\n]*당일[은는이]?\s*포함되지\s*않[^.!?\n]*[.!?]?")
+        for _m in list(_cal.finditer(ans)):
+            if _m.group().strip() and _m.group().strip()[:20] not in context:
+                ans = ans.replace(_m.group(), "", 1)
+                clean_note += " 달력 해석 창작 제거"
+        # v9.80: 근거·질문에 없는 연도가 든 문장 제거 (실측 P0167: 2023→2028 왜곡)
+        _ctx_years = set(re.findall(r"(?:19|20)\d{2}", context + " " + question))
+        _bad_years = [y for y in set(re.findall(r"(?:19|20)\d{2}", ans))
+                      if y not in _ctx_years]
+        if _bad_years:
+            _ny, _out = 0, []
+            for _l in ans.splitlines():
+                if _l.count("|") >= 2 or _l.startswith(("[참고 문서]", "※", "[위험등급")):
+                    _out.append(_l)
+                    continue
+                _keep = []
+                for _sent in re.split(r"(?<![0-9]\.)(?<=[.!?])\s+", _l):
+                    if any(y in _sent for y in _bad_years):
+                        _ny += 1
+                        continue
+                    _keep.append(_sent)
+                _out.append(" ".join(k for k in _keep if k.strip()))
+            if _ny:
+                ans = re.sub(r"\n{3,}", "\n\n", "\n".join(_out))
+                clean_note += f" 근거 밖 연도 문장 {_ny}건 제거"
+        ans, n_reason = strip_invented_reason(ans)
+        if n_reason:
+            clean_note += f" 지어낸 이유 {n_reason}건 제거"
         ans, n_spec = strip_speculation(ans)
         if n_spec:
             clean_note += f" 근거 없는 추측 {n_spec}건 정리"
+        # v9.59: 각주는 표 보강·추측 정리가 모두 끝난 뒤에 붙인다
+        ans, n_foot = ensure_noinfo_footnote(ans)
+        if n_foot:
+            clean_note += " 자료 없음 각주 추가"
         if system is COMPARE_SYSTEM:
             ans, n_gen = warn_partial_generalization(ans)
             if n_gen:
@@ -2527,7 +3193,8 @@ def answer(question_id: str, question: str):
         if clean_note:
             clean_note = " 8) 출력 정리:" + clean_note
 
-        trace = (f"{mt_note}1) {SEARCH_MODE} 검색으로 {len(idx_list)}개 청크 비교 "
+        trace = (f"{mt_note}1) {SEARCH_MODE} 검색으로 {len(idx_list)}개 청크 비교"
+                 f"{_exp_note} "
                  f"2) 임계값 {THRESHOLD} 통과 (최고 유사도 {top_score:.3f}) "
                  f"3) LLM 유형 분류: '{qtype}'{action_note} "
                  f"4) 근거 문서 {len(used)}개 사용 "
@@ -2545,10 +3212,32 @@ def answer(question_id: str, question: str):
             "answer": ans,
         }
     except Exception as e:
+        # v9.73: 예외를 삼키지 않는다. 무엇이 어디서 났는지 남겨야 고칠 수 있다.
+        import traceback
+        tb = traceback.format_exc()
+        try:
+            with open("error.log", "a", encoding="utf-8") as _f:
+                _f.write(f"\n===== {time.strftime('%m-%d %H:%M:%S')} "
+                         f"qid={question_id} retried={_retried}\n"
+                         f"질문: {question}\n{tb}")
+        except OSError:
+            pass
+        _loc = ""
+        _hits = [l for l in tb.splitlines() if 'main.py", line' in l]
+        if _hits:
+            _loc = " @" + _hits[-1].strip().split(",")[1].strip()
+        # v9.73: 심사는 질문당 1회뿐이다. 여기서 포기하면 그 문항은 통째로 날아간다.
+        #   한 번만 통째로 다시 시도한다 (무한 반복은 _retried로 막는다).
+        if not _retried:
+            time.sleep(3)
+            out = answer(question_id=question_id, question=question, _retried=True)
+            out["think_trace"] = (f"[1차 시도 실패: {type(e).__name__}{_loc} → 재시도] "
+                                  + out.get("think_trace", ""))
+            return out
         return {
             "question_id": question_id,
             "question": question,
             "retrieved_context": "",
-            "think_trace": f"오류 발생: {e}",
+            "think_trace": f"오류 발생: {type(e).__name__}: {e}{_loc} (재시도 후에도 실패)",
             "answer": "일시적인 오류가 발생했습니다.",
         }

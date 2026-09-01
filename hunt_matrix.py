@@ -307,6 +307,7 @@ def ask(qid, q):
 
 
 def main():
+    _stop_if_concurrent()
     auto, docs = build_from_docs()
     total = len(S) + len(auto)
     print(f"허점 사냥 매트릭스: 정적 {len(S)}건 + 문서기반 {len(auto)}건 = {total}건")
@@ -355,6 +356,35 @@ def main():
             print(f"        └ {b}")
     print(f"\n나머지 {len(human)}건은 위 답변을 사람이 '볼 포인트' 기준으로 읽어야 합니다.")
     print(f"총 소요 {(time.time()-t0)/60:.1f}분")
+
+
+
+def _stop_if_concurrent():
+    """다른 테스트가 동시에 돌면 API 호출이 겹쳐 '허위 실패'가 난다.
+    실측: 회귀와 주제시험을 같이 돌렸더니 표 생성 항목 5건이 무더기로 실패했다.
+    사람이 기억해야 하는 규칙은 언젠가 어긋나므로 코드가 막는다."""
+    import os, subprocess, sys as _s
+    try:
+        out = subprocess.run(["pgrep", "-af", "python3"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return
+    me = str(os.getpid())
+    others = []
+    for line in out.splitlines():
+        pid = line.split(" ", 1)[0]
+        if pid == me:
+            continue
+        if any(k in line for k in ("test_regression", "hunt_matrix", "test_topic",
+                                   "mock_exam", "test_hunt", "test_consistency")):
+            others.append(line)
+    if others:
+        print("!! 다른 테스트가 이미 돌고 있습니다. 동시에 돌리면 API 호출이 겹쳐")
+        print("!! 표 생성 같은 무거운 항목이 허위로 실패합니다. 중단합니다.")
+        for l in others:
+            print("   ", l)
+        print("!! 끝난 뒤 다시 실행하세요:  pgrep -af 'test_|hunt_'")
+        _s.exit(2)
 
 
 if __name__ == "__main__":

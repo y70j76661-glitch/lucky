@@ -36,3 +36,14 @@ __pycache__/
 *.pyc
 venv/
 .venv/
+main_v9*.py
+main_v*_backup.py
+test_regression_v9*.py
+auto_probe_v*.py
+probe*
+reg*.txt
+night*
+server.log
+error.log
+check52.py
+nohup.out
