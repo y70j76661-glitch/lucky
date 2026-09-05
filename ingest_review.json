@@ -1,0 +1,14 @@
+[
+  {
+    "source": "doc26.docx",
+    "check": "D_단위이상",
+    "severity": "높음",
+    "detail": "26만 4천만원"
+  },
+  {
+    "source": "doc41.docx",
+    "check": "D_단위이상",
+    "severity": "높음",
+    "detail": "148만 5천만원"
+  }
+]

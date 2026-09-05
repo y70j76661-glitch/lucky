@@ -341,6 +341,12 @@ _GUESS = ["예상됨", "가능성 있음", "것으로 보입니다", "추정됩�
           "일반적으로 알려", "통상적으로"]
 _INFER = ["간주되기 때문", "판단되기 때문", "해석되기 때문", "시사합니다", "유추할 수 있"]
 _NUM = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(원|만원|억|%|퍼센트|년|개월|일|회|등급|배)")
+# v11: 세제 프롬프트 규칙이 답변에 넣는 확정 숫자들 — 검색 근거에 없어도 정당하다.
+#   (실측: 44건 중 다수가 600/900/16.5% 같은 규칙 숫자였다. 400만원은 구기준
+#    금지값이므로 절대 여기 넣지 않는다.)
+_RULE_NUMS = {"600만원", "900만원", "1800만원", "5500만원", "4500만원",
+              "1500만원", "300만원", "16.5%", "13.2%", "3.3%", "5.5%",
+              "15.4%", "10%", "55세", "5년"}
 _CODE_LINE = ("[위험등급", "※", "[참고 문서]", "[연금수령 요건",
               "자료 없음'으로 표시된 항목")
 # ── v7: 저장본만으로 찾을 수 있는 결함들 (API 호출 없음 = 크레딧 0원) ──────
@@ -451,6 +457,8 @@ def check(item, ans, trace, ctx):
                 _qflat = re.sub(r"[,\s]", "", item["q"])
                 if raw in flat_ctx or num in ctx or raw in _qflat:
                     continue
+                if f"{raw}{unit}" in _RULE_NUMS:
+                    continue          # 프롬프트 규칙 숫자 — 창작이 아니다
                 seen.append(f"{num}{unit}")
         seen = list(dict.fromkeys(seen))[:3]
         if seen:
@@ -495,9 +503,28 @@ def main():
     if a.extra and os.path.exists(a.extra):
         ex = [l.strip() for l in open(a.extra, encoding="utf-8")
               if l.strip() and not l.startswith("#")]
-        for i, q in enumerate(ex, 1):
+        # v10: 외부 질문도 같은 잣대 — 본체와 겹치거나 서로 비슷하면 버린다.
+        #   (같은 질문을 다르게 적은 것은 새 질문이 아니다)
+        def _near(g1, n1, g2, n2):
+            return n1 == n2 and \
+                len(g1 & g2) / max(min(len(g1), len(g2)), 1) >= 0.65
+        _seen = [(_sig(x["q"]), _negs(x["q"])) for x in qs]
+        _seenk = {re.sub(r"\s", "", x["q"]) for x in qs}
+        kept = []
+        for q in ex:
+            k = re.sub(r"\s", "", q)
+            g, ng = _sig(q), _negs(q)
+            if k in _seenk or len(g) < 3:
+                continue
+            if any(_near(g, ng, g2, n2) for g2, n2 in _seen):
+                continue
+            _seenk.add(k)
+            _seen.append((g, ng))
+            kept.append(q)
+        for i, q in enumerate(kept, 1):
             qs.append(dict(kind="E", q=q, src="", id=f"E{i:04d}"))
-        print(f"외부 질문 {len(ex)}건 추가 (--extra {a.extra})")
+        print(f"외부 질문 {len(kept)}건 추가 "
+              f"(중복·유사 {len(ex) - len(kept)}건 제외, --extra {a.extra})")
     print(f"질문 재료: 문서질문 {stat['A']} / 사정붙임 {stat['A2']} / "
           f"용어템플릿 {stat['B']} / 상품비교 {stat['C']}"
           f"  (중복·유사 {_dup_dropped[0]}건 제외)  → 실행 {len(qs)}건")

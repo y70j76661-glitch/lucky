@@ -47,3 +47,6 @@ server.log
 error.log
 check52.py
 nohup.out
+*.bak_*
+main.py.bak_*
+*_out.txt

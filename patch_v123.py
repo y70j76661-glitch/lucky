@@ -1,0 +1,30 @@
+# -*- coding: utf-8 -*-
+"""patch_v123.py — v122(f44bf0b5) main.py 에 v12.3(P0-3·P1-3/G05·G06) 적용.
+  P0-3: 과세제외 ※카드 3중중복 제거 / P1-3(G05): 오표기 이중액자 방지 / G06: '몇 살/나이' 요건카드+G07 부정가드.
+자동백업·자가검증. 이미 v12.3면 스킵. 사용: cd /root/app && python3 patch_v123.py  검증: md5==22dd682c4a7f4b4ea8911ec1057dbcaa"""
+import sys,os,time,hashlib,py_compile
+TARGET=sys.argv[1] if len(sys.argv)>1 else "main.py"
+EXPECT_BEFORE='f44bf0b5caa95ce9ce13892eeb01f3b0'
+EXPECT_AFTER='22dd682c4a7f4b4ea8911ec1057dbcaa'
+HUNKS=[["                        r\"연금저축[^.?!\\n]{0,40}받|부어야\\s*받|채워야\\s*받|\"\n                        r\"부어도\\s*[^.?!\\n]{0,10}받\")\n_REQ_ASK = re.compile(r\"\\d\\s*년|요건|조건|언제|가능|받을\\s*수\\s*있|받겠|받는다던|\"\n                      r\"부어야|부어도|채워야|되나|될까|자격|몇\\s*년\")\n# v11.7: 기한 카드는 '기한을 실제로 묻는' 질문에만 붙인다(무관 질문에 붙던 오탐 차단).\n_DL_ACT = (\"이전\", \"이체\", \"전환\", \"입금\", \"옮기\", \"납입\", \"납부\", \"해지\", \"환매\", \"인출\", \"가입\")\n_DL_VERB = r\"(?:하면|하려|하려면|해야|하는|하고|할|한다|하시|합니까|하나요|하죠|하면서|하게)\"\n", "                        r\"연금저축[^.?!\\n]{0,40}받|부어야\\s*받|채워야\\s*받|\"\n                        r\"부어도\\s*[^.?!\\n]{0,10}받\")\n_REQ_ASK = re.compile(r\"\\d\\s*년|요건|조건|언제|가능|받을\\s*수\\s*있|받겠|받는다던|\"\n                      r\"부어야|부어도|채워야|되나|될까|자격|몇\\s*년|몇\\s*살|나이|몇\\s*세\")\n# v12.3(G06): 수령/나이 주제를 '부정'한 질문(예: '나이는 묻지 않고', '수령 말고')엔 요건 카드 미부착.\n#   '나이' 추가로 G06('몇 살')은 잡되, G07('나이는 묻지 않고 세액공제만')은 이 가드로 차단.\n_REQ_NEG = re.compile(r\"(?:나이|수령|살|요건|개시)[^\\n]{0,8}(?:묻지\\s*않|말고|제외|빼고|아니라|아닌)\")\n# v11.7: 기한 카드는 '기한을 실제로 묻는' 질문에만 붙인다(무관 질문에 붙던 오탐 차단).\n_DL_ACT = (\"이전\", \"이체\", \"전환\", \"입금\", \"옮기\", \"납입\", \"납부\", \"해지\", \"환매\", \"인출\", \"가입\")\n_DL_VERB = r\"(?:하면|하려|하려면|해야|하는|하고|할|한다|하시|합니까|하나요|하죠|하면서|하게)\"\n"], ["def pension_req_card(question):\n    \"\"\"연금수령 요건을 묻는 질문이면 문서 기준 요건 세 가지를 코드가 붙인다.\"\"\"\n    if not (_REQ_TOPIC.search(question) and _REQ_ASK.search(question)):\n        return None\n    # v11.7: 세액공제·공제금액 질문 오탐 방지 — 수령/인출/나이 의도가 명확할 때만 부착.\n    if re.search(r\"세액공제|공제액|공제\\s*금액|돌려받|환급\", question) \\\n", "def pension_req_card(question):\n    \"\"\"연금수령 요건을 묻는 질문이면 문서 기준 요건 세 가지를 코드가 붙인다.\"\"\"\n    if not (_REQ_TOPIC.search(question) and _REQ_ASK.search(question)):\n        return None\n    # v12.3(G06): 수령/나이 주제를 부정한 질문(G07 '나이는 묻지 않고')은 미부착.\n    if _REQ_NEG.search(question):\n        return None\n    # v11.7: 세액공제·공제금액 질문 오탐 방지 — 수령/인출/나이 의도가 명확할 때만 부착.\n    if re.search(r\"세액공제|공제액|공제\\s*금액|돌려받|환급\", question) \\\n"], ["        # (1-4) v9.26: 답변에 문서의 오표기가 그대로 인용되면 계산값으로 바꾸고 사실을 밝힌다\n        n_unit = 0\n        for n, pat in _NOTE_PAT:\n            new, cnt = pat.subn(\n                f\"{n['right']}(자료 원문에는 '{n['wrong']}'으로 적혀 있으나 \"\n                f\"{n['basis']}이므로 계산상 {n['right']}입니다)\", ans)\n            if cnt:\n                ans, n_unit = new, n_unit + cnt\n        if n_unit:\n            clean_note += f\" 단위 오표기 {n_unit}건 고지\"\n\n", "        # (1-4) v9.26: 답변에 문서의 오표기가 그대로 인용되면 계산값으로 바꾸고 사실을 밝힌다\n        n_unit = 0\n        for n, pat in _NOTE_PAT:\n            _rep = (f\"{n['right']}(자료 원문에는 '{n['wrong']}'으로 적혀 있으나 \"\n                    f\"{n['basis']}이므로 계산상 {n['right']}입니다)\")\n            _cnt = [0]\n            def _unit_sub(m, _r=_rep, _c=_cnt, _src=ans):\n                # v12.3(P1-3/G05): LLM이 이미 \"'…'으로 잘못 표기/오기\"라고 오류로 밝힌 오표기는\n                #   교체하지 않는다(교체 시 '올바른값(자료 원문에는 오기…)으로 잘못 표기'라는\n                #   이중 액자·장황 발생). 오기를 '맞다'고 인용한 경우엔 그대로 교체(교정 유지).\n                if re.search(r\"잘못|오기|오표기|틀리\", _src[m.end():m.end() + 14]):\n                    return m.group(0)\n                _c[0] += 1\n                return _r\n            new = pat.sub(_unit_sub, ans)\n            if _cnt[0]:\n                ans, n_unit = new, n_unit + _cnt[0]\n        if n_unit:\n            clean_note += f\" 단위 오표기 {n_unit}건 고지\"\n\n"], ["        ans, n_prem = fix_false_premise(ans)\n        if n_prem:\n            clean_note += f\" 잘못된 전제 교정 {n_prem}건\"\n\n        # (1-6b) v9.41: ISA 전환금 질문이면 '대상 총액'을 코드가 계산해 붙인다.\n        #   조건 없이 붙인다 — '이미 썼는지'를 판단하려 들면 그 판단이 또 어긋난다.\n", "        ans, n_prem = fix_false_premise(ans)\n        if n_prem:\n            clean_note += f\" 잘못된 전제 교정 {n_prem}건\"\n        # v12.3(P0-3): (1-4d) 과세제외 ※카드가 먼저 붙고, 뒤이어 fix_false_premise가 같은 개념\n        #   ('세액공제 안 받은 납입금=비과세')을 교정문으로 넣으면 3중 중복(실측 N01). (1-4d)의\n        #   가드는 교정문을 못 봤으니, 교정문이 그 개념을 이미 담았으면 뒤늦게 ※카드만 뗀다(내용 불변).\n        _EXEMPT_CARD = (\"\\n\\n※ 기타소득세 16.5%는 세액공제를 받은 납입금과 운용수익을 인출할 때 \"\n                        \"적용됩니다. 세액공제를 받지 않은 납입금(과세제외금액)은 인출하더라도 \"\n                        \"기타소득세가 부과되지 않습니다.\")\n        if n_prem and \"받지 않은 납입금은 인출해도 세금이 없\" in ans and _EXEMPT_CARD in ans:\n            ans = ans.replace(_EXEMPT_CARD, \"\")\n            clean_note += \" 과세제외 중복 ※카드 제거\"\n\n        # (1-6b) v9.41: ISA 전환금 질문이면 '대상 총액'을 코드가 계산해 붙인다.\n        #   조건 없이 붙인다 — '이미 썼는지'를 판단하려 들면 그 판단이 또 어긋난다.\n"]]
+def md5(s): return hashlib.md5(s.encode("utf-8")).hexdigest()
+def main():
+    if not os.path.exists(TARGET): print("[중단] 대상 없음:",TARGET); sys.exit(1)
+    src=open(TARGET,encoding="utf-8").read(); before=md5(src)
+    print("대상:",TARGET,"\n적용전 md5:",before)
+    if "v12.3(P0-3)" in src: print("[스킵] 이미 v12.3 적용됨."); sys.exit(0)
+    if before!=EXPECT_BEFORE: print("[경고] 적용전 md5가 예상 v122와 다름. 훅 매칭되면 계속.")
+    for k,(O,N) in enumerate(HUNKS):
+        c=src.count(O)
+        if c!=1: print(f"[중단] 훅{k} OLD 매칭 {c}회(1이어야). 취소 — 파일 상태 붙여주세요."); sys.exit(2)
+    out=src
+    for O,N in HUNKS: out=out.replace(O,N,1)
+    after=md5(out); ts=time.strftime("%Y%m%d_%H%M%S"); bak=TARGET+".bak_v122_"+ts
+    open(bak,"w",encoding="utf-8").write(src); open(TARGET,"w",encoding="utf-8").write(out)
+    print("  ✓ 훅",len(HUNKS),"개 적용")
+    print("백업:",bak,"\n적용후 md5:",after,"\n기대   md5:",EXPECT_AFTER," →","일치 ✅" if after==EXPECT_AFTER else "불일치 ❌")
+    try: py_compile.compile(TARGET,doraise=True); print("py_compile: OK")
+    except py_compile.PyCompileError as e: print("[중단] 문법오류:",e); sys.exit(3)
+    print("마커 v12.3:",out.count("v12.3("),"(기대 4)")
+    print("\n완료. uvicorn 재시작 후 스모크.")
+if __name__=="__main__": main()
