@@ -385,7 +385,7 @@ def check(qid, q, ans):
     body = "\n".join(l for l in body.split("\n") if not re.match(r"^\s*\(출처\s*[:：]\s*[^)]+\)", l)
                      and not (l.lstrip().startswith("※") and "제외했습니다" in l))   # 제외 고지에 적힌 이름은 주장이 아님
     raw = re.findall(r"\[참고 문서\]\s*(.+)$", ans, re.M)
-    srcs = [x.strip() for x in (raw[0].split(",") if raw else []) if not x.strip().startswith("해당 없음")]   # v13.79: 정상 예외 표기는 출처명이 아님
+    srcs = [x.strip() for x in (raw[0].split(",") if raw else [])]
     texts, missing = [], []
     for s0 in srcs:
         k = nsrc(s0)

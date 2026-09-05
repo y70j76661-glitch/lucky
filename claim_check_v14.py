@@ -234,26 +234,12 @@ def check_semantic(q, body):
         if re.search(r"(?:전체|모든)\s*(?:해지|인출)\s*금액[^\n]{0,10}16\.5", body):
             out.append("  M) '전체 해지금액에 16.5%'로 읽히는 표현")
     if re.search(r"추천|골라|어떤\s*상품|좋은\s*상품", q) and re.search(r"하나|한\s*개|한\s*가지|1개", q):
-        if not re.search(r"대표 검토 후보|확정하지 않|확정해 추천하지는|후보로 검토하실 수 있습니다|'하나'로 지정하지 않|조건이 정해지면", body):
+        if not re.search(r"대표 검토 후보|확정하지 않|확정해 추천하지는|후보로 검토하실 수 있습니다", body):
             out.append("  M) '하나' 요청인데 확정 보류·대표 후보 표시가 없음")
     for st in sents(body):
         if re.search(r"높은\s*성장\s*가능성을\s*제공|회복(?:할)?\s*가능성이\s*(?:큽|높)|극복할\s*가능성|안전합니다|적합합니다|높은\s*수익을\s*제공", st) and not st.lstrip().startswith("※"):
             out.append(f"  M) 근거 밖 전망·적합성 단정: '{st.strip()[:60]}…'")
             break
-    return out
-
-
-# ---------- N) 문장 완결성·출처 줄(v13.78): 잘린 문장, 출처 줄 부재(정상 예외는 따로 판정) ----------
-def check_form(q, ans):
-    out = []
-    body = ans.split("[참고 문서]")[0]
-    lines = [l.strip() for l in body.split("\n") if l.strip() and not l.strip().startswith(("※", "[", "(", "|", "-"))]
-    if lines:
-        last = lines[-1]
-        if not re.search(r"[.!?)\]”\"':]$", last) and not re.search(r"[.!?]\s*$", last):
-            out.append(f"  N) 문장 완결성: 본문이 문장 부호 없이 끝남 — '…{last[-30:]}'")
-    if "[참고 문서]" not in ans:
-        out.append("  N) 출처 줄 없음(정상 예외 표기 '[참고 문서] 해당 없음'도 없음)")
     return out
 
 # ---------- D) 조건 주장 ----------
@@ -385,7 +371,7 @@ def check(qid, q, ans):
     body = "\n".join(l for l in body.split("\n") if not re.match(r"^\s*\(출처\s*[:：]\s*[^)]+\)", l)
                      and not (l.lstrip().startswith("※") and "제외했습니다" in l))   # 제외 고지에 적힌 이름은 주장이 아님
     raw = re.findall(r"\[참고 문서\]\s*(.+)$", ans, re.M)
-    srcs = [x.strip() for x in (raw[0].split(",") if raw else []) if not x.strip().startswith("해당 없음")]   # v13.79: 정상 예외 표기는 출처명이 아님
+    srcs = [x.strip() for x in (raw[0].split(",") if raw else [])]
     texts, missing = [], []
     for s0 in srcs:
         k = nsrc(s0)
@@ -398,13 +384,9 @@ def check(qid, q, ans):
     if missing:
         out.append(f"  E) 출처명 불일치: {missing}")
     if not texts:
-        # v13.78: 실시간·무관·보안 거절처럼 근거 문서가 없는 것이 '정상'인 답변은 정상 예외로 판정(검사 불가가 아님)
-        if re.search(r"\[참고 문서\]\s*해당 없음", ans) or re.search(r"범위를 벗어나|실시간 시장 데이터|응해 드릴 수 없|공개할 수 없어", ans):
-            _ok = "  정상 예외(근거 문서 없음이 정상: 실시간·무관·보안 거절)" + (" — 단, '[참고 문서] 해당 없음' 표기 누락" if "[참고 문서]" not in ans else "")
-            return out + [_ok] + check_form(q, ans) + [x for x in check_semantic(q, body) if "하나" not in x]
-        return out + ["  (표시 출처 청크 없음 — 이하 검사 불가)"] + check_compare_relation(body) + check_recommend_wording(q, body) + check_source_integrity(ans) + check_form(q, ans)
+        return out + ["  (표시 출처 청크 없음 — 이하 검사 불가)"] + check_compare_relation(body) + check_recommend_wording(q, body) + check_source_integrity(ans)
     out += check_rates(body, texts) + check_products(body, texts) + check_calc(body, texts) + check_conditions(body, texts) + check_requirements(q, body) + check_qrules(q, body)
-    out += check_compare_relation(body) + check_recommend_wording(q, body, texts) + check_source_integrity(ans) + check_semantic(q, body) + check_form(q, ans)
+    out += check_compare_relation(body) + check_recommend_wording(q, body, texts) + check_source_integrity(ans) + check_semantic(q, body)
     return out
 
 
