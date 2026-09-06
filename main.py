@@ -8164,6 +8164,23 @@ def _answer_core(question_id: str, question: str, _retried: bool = False):
                     if _lab_txt not in ans:
                         ans = ans.rstrip() + f"\n\n※ {_lab_txt} 항목은 제공된 문서에서 확인되지 않아 비교 항목에서 제외했습니다."
                 clean_note += f" 비교 표 정보 없는 행 {len(_gone15)}개 제외"
+            # v13.92(T15) [제외 속성 서술 금지]: 표에서 제외된 속성(수익률·시장잔고 등)을 산문이 다시 말하면('약간의 수익률 차이가 있으니') 근거 없는 서술 → 제거
+            if _gone15:
+                _gk = re.compile("|".join(k_ for k_ in ["수익률", "성과", "시장\\s*잔고", "설정액", "순자산", "투자\\s*기간", "만기", "유의사항"] if any(re.search(k_, g_) for g_ in _gone15)) or r"(?!x)x")
+                _o92, _n92 = [], 0
+                for _ln in ans.split("\n"):
+                    if not _is_prose_line(_ln) or "비교 항목에서 제외" in _ln or "비교 결과(근거 문서 기준)" in _ln:
+                        _o92.append(_ln); continue
+                    _lead = _PROSE_LEAD.match(_ln).group(0)
+                    _ss = re.split(r"(?<=[.!?])\s+", _ln[len(_lead):])
+                    _kp = [s_ for s_ in _ss if not _gk.search(s_)]
+                    _n92 += len(_ss) - len(_kp)
+                    if not _ln.strip():
+                        _o92.append(_ln)
+                    elif _kp:
+                        _o92.append(_lead + " ".join(_kp))
+                if _n92:
+                    ans = re.sub(r"\n{3,}", "\n\n", "\n".join(_o92)); clean_note += f" 제외 속성 서술 {_n92}건 제거"
             # v13.88(T15) [비교 답변 관련성]: 질문이 세제를 묻지 않으면 '세액공제 가능' 류 문장(표 밖 요약·산문)은 계좌 단위 혜택이라 제거; 위험등급 행의 미확정 표기 통일
             if not re.search(r"세제|세금|세액|과세|공제", question):
                 _o88, _n88 = [], 0
@@ -8558,7 +8575,8 @@ def _answer_core(question_id: str, question: str, _retried: bool = False):
                     _ss = re.split(r"(?<=[.!?])\s+", _l[len(_lead):])
                     _kp, _prev_drop = [], False
                     for s_ in _ss:
-                        if re.search(r"(?:모두|전부|다|전액)\s*(?:다시\s*)?(?:반납|반환|토해|돌려|뱉)", s_) and not re.search(r"아닙니다|아니며|않습니다|아니라|않고|아니고", s_):
+                        if (re.search(r"(?:모두|전부|다|전액)\s*(?:다시\s*)?(?:반납|반환|토해|돌려|뱉)", s_) or re.search(r"세액공제[^.!?\n]{0,12}?(?:환급|반납|반환|토해)[^.!?\n]{0,10}?(?:이루어|해야|하게\s*됩|됩니다)", s_)) \
+                                and not re.search(r"아닙니다|아니며|않습니다|아니라|않고|아니고", s_):   # v13.92: '세액공제 환급이 이루어진다' 변형
                             _n8p += 1; _prev_drop = True; continue
                         if _prev_drop and re.match(r"^(?:이는|이것은|이러한|그것은)\s", s_):     # 지운 문장을 받는 대명사 문장도 함께
                             _n8p += 1; continue
@@ -8969,7 +8987,7 @@ def _answer_core(question_id: str, question: str, _retried: bool = False):
                     _g18.append(_ln); continue
                 _lead = _PROSE_LEAD.match(_ln).group(0)
                 _ss = re.split(r"(?<=[.!?])\s+", _ln[len(_lead):])
-                _kp = [s_ for s_ in _ss if not re.search(r"추천\s*(?:드립니다|합니다|드려요|해\s*드립니다)|권장\s*(?:드립니다|합니다|드려요)|권해\s*드립니다|전문가[^.!?\n]{0,10}?(?:상담|상의|문의)[^.!?\n]{0,15}?(?:좋|바랍니다|권|세요|시길|받으)|(?:자세한|구체적인|보다\s*상세한|세부)\s*[^.!?\n]{0,20}?(?:사항|내용|정보|방안)[^.!?\n]{0,45}?(?:확인|문의|참고)하(?:시기\s*바랍니다|세요|십시오|시길|는\s*것이\s*좋|여\s*확인)", s_)]   # v13.85/86/89: 전문가 상담·연락처 안내 마무리
+                _kp = [s_ for s_ in _ss if not re.search(r"추천\s*(?:드립니다|합니다|드려요|해\s*드립니다)|권장\s*(?:드립니다|합니다|드려요)|권해\s*드립니다|전문가[^.!?\n]{0,10}?(?:상담|상의|문의)[^.!?\n]{0,15}?(?:좋|바랍니다|권|세요|시길|받으)|(?:자세한|구체적인|보다\s*상세한|세부|추가적인|기타)\s*[^.!?\n]{0,20}?(?:사항|내용|정보|방안)[^.!?\n]{0,45}?(?:확인|문의|참고)하(?:시기\s*바랍니다|세요|십시오|시길|는\s*것이\s*좋|여\s*확인)|(?:상황|목표|성향|여건)에\s*맞(?:게|춰|는)[^.!?\n]{0,25}?(?:것이|게)\s*(?:중요|좋)", s_)]   # v13.85/86/89: 전문가 상담·연락처 안내 마무리
                 _n18 += len(_ss) - len(_kp)
                 if not _ln.strip():
                     _g18.append(_ln)
@@ -9017,7 +9035,7 @@ def _answer_core(question_id: str, question: str, _retried: bool = False):
         #   상품 적합성 고지는 본문에 상품·펀드가 있을 때). 앞 단계에서 본문이 코드 문장으로 바뀌면 고지만 남아 '무관 정보'가 되던 경로 차단(실측 C9).
         _bodyx = "\n".join(l_ for l_ in ans.split("\n") if not l_.lstrip().startswith("※"))
         _nx = 0
-        if not re.search(r"수익률|성과|초과수익", _bodyx):
+        if not (re.search(r"수익률|성과|초과수익", _bodyx) and re.search(r"\d+(?:\.\d+)?\s*%", _bodyx)):   # v13.93: 검증된 수익률 '값'이 본문에 남아 있을 때만(낱말만으로는 유지 안 함)
             ans, _k = re.subn(r"(?m)^\s*※\s*과거의\s*수익률[^\n]*\n?", "", ans); _nx += _k
         if len(re.findall(r"(?m)^\s*\d+[.)]\s", _bodyx)) < 2:
             ans, _k = re.subn(r"(?m)^\s*※\s*위\s*나열\s*순서[^\n]*\n?", "", ans); _nx += _k
@@ -9099,6 +9117,7 @@ def _answer_core(question_id: str, question: str, _retried: bool = False):
         if re.search(r"DB|DC|확정급여|확정기여", question):
             ans = re.sub(r"(?:이는\s*)?(?:현행|기존)(?:의)?\s*퇴직금\s*제도와\s*동일한\s*방식입니다", "급여 산정 구조가 확정급여형이라는 점에서 기존 퇴직금 제도와 유사합니다", ans)   # v13.84: '기존의'
             ans = re.sub(r"(DB형|확정급여형)(?:은|는)\s*회사가\s*[^.!?\n]{0,25}?보장(?:해\s*주는|하는|해주는)\s*(?:대신|반면에?)[^.!?\n]{0,20}?(?:부담하고|지고),?\s*", r"\1은 퇴직급여 산정 방식이 사전에 정해지고 회사가 적립금 운용 결과를 부담하며, ", ans)   # v13.84(S1)
+            ans = re.sub(r"(DB형|확정급여형)(?:은|는)\s*(?:회사|기업|사용자)(?:가|이)\s*[^.!?\n]{0,30}?보장(?:해\s*주는|하는|해주는)\s*(?:대신|반면에?),?\s*", r"\1은 퇴직급여 산정 방식이 사전에 정해지고 회사가 적립금 운용 결과를 부담하는 반면, ", ans)   # v13.92(S1): '기업이 … 연금의 액수를 보장하는 반면'
             ans = re.sub(r"(?:이는\s*)?(?:현행|기존)\s*퇴직금\s*제도와\s*동일하게,?\s*", "급여 산정 구조가 확정급여형이라는 점에서 기존 퇴직금 제도와 유사하게, ", ans)   # v13.79
             ans = re.sub(r"일정한\s*금액을\s*보장받습니다", "사전에 정해진 산식에 따른 퇴직급여를 받습니다", ans)
             ans = re.sub(r"(DB형|확정급여형)(?:은|는)\s*회사가\s*[^.!?\n]{0,25}?보장(?:해\s*주는|하는|해주는)\s*반면", r"\1은 퇴직급여 산정 방식이 사전에 정해지고 회사가 적립금 운용 결과를 부담하는 반면", ans)   # v13.81(S1)
